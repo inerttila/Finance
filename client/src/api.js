@@ -93,6 +93,20 @@ export function createTransaction(payload) {
   });
 }
 
+export function searchTransactions({ q = "", category = "", month = "" } = {}) {
+  const query = String(q || "").trim();
+  const slug = String(category || "").trim();
+  const monthKey = String(month || "").trim();
+  if (!query && !slug && !monthKey) {
+    return Promise.resolve({ transactions: [] });
+  }
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (slug) params.set("category", slug);
+  if (monthKey) params.set("month", monthKey);
+  return request(`/api/transactions/search?${params.toString()}`);
+}
+
 export function updateTransaction(id, payload) {
   return request(`/api/transactions/${id}`, {
     method: "PATCH",

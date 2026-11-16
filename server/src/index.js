@@ -679,6 +679,62 @@ app.put("/api/income", async (req, res, next) => {
   }
 });
 
+app.get("/api/transactions/search", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const q = String(req.query?.q || "").trim();
+    const category = String(req.query?.category || "").trim();
+    const month = String(req.query?.month || "").trim();
+    const bounds = month ? monthBounds(month) : null;
+    if (month && !bounds) {
+      return res.status(400).json({ error: "That month is not valid." });
+    }
+    if (!q && !category && !month) {
+      return res.json({ transactions: [] });
+    }
+    if (q.length > 80) {
+      return res.status(400).json({ error: "Search is too long." });
+    }
+    if (category && !(await categoryExists(user.id, category))) {
+      return res.status(400).json({ error: "That category was not found." });
+    }
+    const pattern = q ? `%${q.replace(/[%_\\]/g, "\\$&")}%` : "";
+    const digits = q.replace(/\D/g, "");
+    const { rows } = await pool.query(
+      `select id, amount, description, category_slug, people,
+              to_char(spent_on, 'YYYY-MM-DD') as spent_on,
+              weekend, fixed
+       from transactions
+       where user_id = $1
+         and ($4 = '' or category_slug = $4)
+         and ($5::date is null or (spent_on >= $5::date and spent_on < $6::date))
+         and (
+           $2 = ''
+           or description ilike $2 escape '\\'
+           or exists (
+             select 1 from unnest(people) as person
+             where person ilike $2 escape '\\'
+           )
+           or ($3 <> '' and amount::text like $3)
+           or ($3 <> '' and to_char(amount, 'FM999999999') like $3)
+         )
+       order by spent_on desc, sort_order desc, id desc
+       limit 120`,
+      [
+        user.id,
+        pattern,
+        digits ? `%${digits}%` : "",
+        category,
+        bounds?.start || null,
+        bounds?.next || null,
+      ],
+    );
+    res.json({ transactions: rows.map(mapTx) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/transactions", async (req, res, next) => {
   try {
     const user = await resolveUserId(req);

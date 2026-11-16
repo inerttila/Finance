@@ -15,6 +15,7 @@ import {
   saveIncome,
   saveSiteMoney,
   scanInvoice,
+  searchTransactions,
   setStoredUserId,
   suggest,
   updateTransaction,
@@ -307,20 +308,48 @@ function writeHeroPrefs(userId, prefs) {
   localStorage.setItem(heroPrefsKey(userId), JSON.stringify(prefs));
 }
 
-function TabTitle({ title, copy }) {
+function clearFinanceLocalData(userId) {
+  const id = userId || "anon";
+  const exact = new Set([
+    savingsKey(id),
+    heroPrefsKey(id),
+    `finance-pie-open:${id}`,
+    `finance-categories-open:${id}`,
+  ]);
+  const sitePrefix = `finance-site-entries:${id}:`;
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (exact.has(key) || key.startsWith(sitePrefix)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+    if (String(localStorage.getItem("finance-user-id") || "") === String(userId || "")) {
+      localStorage.removeItem("finance-user-id");
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function TabTitle({ title, copy, action }) {
   return (
     <header className="tab-hero" key={title}>
-      <h1 className="tab-title">
-        {title.split(" ").map((word, index) => (
-          <span
-            key={`${title}-${word}`}
-            className="auth-word"
-            style={{ animationDelay: `${120 + index * 90}ms` }}
-          >
-            {word}
-          </span>
-        ))}
-      </h1>
+      <div className="tab-hero-row">
+        <h1 className="tab-title">
+          {title.split(" ").map((word, index) => (
+            <span
+              key={`${title}-${word}`}
+              className="auth-word"
+              style={{ animationDelay: `${120 + index * 90}ms` }}
+            >
+              {word}
+            </span>
+          ))}
+        </h1>
+        {action}
+      </div>
       {copy ? <p className="hint tab-copy">{copy}</p> : null}
     </header>
   );
@@ -906,6 +935,7 @@ export default function App() {
             {
               id: "home",
               label: "Home",
+              tone: "home",
               icon: (
                 <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
                   <path
@@ -918,6 +948,7 @@ export default function App() {
             {
               id: "expenses",
               label: "Expenses",
+              tone: "expenses",
               icon: (
                 <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
                   <path
@@ -928,8 +959,22 @@ export default function App() {
               ),
             },
             {
+              id: "search",
+              label: "Search",
+              tone: "search",
+              icon: (
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M10 3a7 7 0 0 1 5.5 11.2l4.2 4.1-1.4 1.4-4.1-4.2A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z"
+                  />
+                </svg>
+              ),
+            },
+            {
               id: "config",
               label: "Config",
+              tone: "config",
               icon: (
                 <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
                   <path
@@ -943,7 +988,11 @@ export default function App() {
             <button
               key={tab.id}
               type="button"
-              className={appTab === tab.id ? "app-nav-item on" : "app-nav-item"}
+              className={
+                appTab === tab.id
+                  ? `app-nav-item on tone-${tab.tone}`
+                  : `app-nav-item tone-${tab.tone}`
+              }
               aria-label={tab.label}
               aria-current={appTab === tab.id ? "page" : undefined}
               onClick={() => setAppTab(tab.id)}
@@ -987,7 +1036,7 @@ export default function App() {
               This month
             </button>
           ) : null}
-          {canAdd && appTab !== "config" && (
+          {canAdd && appTab !== "config" && appTab !== "search" && (
             <button
               type="button"
               className="btn primary add-expense-top"
@@ -1032,7 +1081,21 @@ export default function App() {
 
       {data && appTab === "home" && (
         <section className="tab-panel">
-          <TabTitle title="Home" />
+          <TabTitle
+            title="Home"
+            copy="What’s left this month, and how the days are going."
+            action={
+              canAdd ? (
+                <button
+                  type="button"
+                  className="btn primary add-expense-desk"
+                  onClick={() => startAdd(data.closed ? "past" : "open")}
+                >
+                  {addTarget ? "Close" : "Add expense"}
+                </button>
+              ) : null
+            }
+          />
           <Hero
             data={data}
             userId={userId}
@@ -1071,17 +1134,6 @@ export default function App() {
               }
             />
           </div>
-          {canAdd && (
-            <div className="home-add">
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => startAdd(data.closed ? "past" : "open")}
-              >
-                {addTarget ? "Close" : "Add expense"}
-              </button>
-            </div>
-          )}
         </section>
       )}
 
@@ -1272,6 +1324,25 @@ export default function App() {
         </section>
       )}
 
+      {data && appTab === "search" && (
+        <section className="tab-panel">
+          <TabTitle
+            title="Search"
+            copy="Find spending by amount or name across every month."
+          />
+          <SearchPanel
+            userId={userId}
+            categories={data.categories}
+            monthList={data.monthList || []}
+            onOpenMonth={(monthKey) => {
+              showMonth(monthKey);
+              setAppTab("expenses");
+            }}
+            onError={setError}
+          />
+        </section>
+      )}
+
       {data && appTab === "config" && (
         <section className="tab-panel">
           <TabTitle
@@ -1294,6 +1365,8 @@ export default function App() {
               setError("");
             }}
             onDeleted={async () => {
+              const deletedUserId = userId;
+              clearFinanceLocalData(deletedUserId);
               setUsers([]);
               setStoredUserId(null);
               setUserId(null);
@@ -1303,7 +1376,26 @@ export default function App() {
               setEditingId(null);
               clearFilters();
               setError("");
-              await onSignOut();
+              setAuthBusy(true);
+              try {
+                if (authUser && typeof authUser.delete === "function") {
+                  await authUser.delete();
+                } else if (authUser) {
+                  await authUser.signOut();
+                }
+              } catch (err) {
+                setError(
+                  err.humanReadableMessage ||
+                    err.message ||
+                    "Ledger removed, but the Hexclave account could not be deleted.",
+                );
+              } finally {
+                markShowHello();
+                setAuthUser(null);
+                setUserMenuOpen(false);
+                setAuthBusy(false);
+                setScreen("auth");
+              }
             }}
             onError={setError}
           />
@@ -1468,6 +1560,403 @@ function CategoriesRail({
         </div>
       </div>
     </div>
+  );
+}
+
+function matchesSearchNeedle(haystack, needle, amount) {
+  const text = String(haystack || "").toLowerCase();
+  if (text.includes(needle)) return true;
+  const digits = needle.replace(/\D/g, "");
+  if (!digits) return false;
+  const amountText = String(Number(amount) || 0);
+  return amountText.includes(digits);
+}
+
+function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
+  const [draft, setDraft] = useState("");
+  const [needle, setNeedle] = useState("");
+  const [category, setCategory] = useState("");
+  const [monthFilter, setMonthFilter] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState([]);
+
+  useEffect(() => {
+    const id = setTimeout(() => setNeedle(draft.trim()), 280);
+    return () => clearTimeout(id);
+  }, [draft]);
+
+  const monthChips = useMemo(() => {
+    const keys = new Set();
+    for (const item of monthList || []) {
+      if ((Number(item.spent) || 0) > 0) keys.add(item.month);
+    }
+    for (const entry of readSavingsEntries(userId)) {
+      const key = String(entry.date || "").slice(0, 7);
+      if (key) keys.add(key);
+    }
+    for (const item of monthList || []) {
+      if (readSiteEntries(userId, item.month, 0).length > 0) {
+        keys.add(item.month);
+      }
+    }
+    return [...keys].sort((a, b) => b.localeCompare(a));
+  }, [monthList, userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const active = Boolean(needle || category || monthFilter);
+    if (!active) {
+      setResults([]);
+      setLoading(false);
+      return undefined;
+    }
+
+    function inMonth(date) {
+      if (!monthFilter) return true;
+      return String(date || "").startsWith(monthFilter);
+    }
+
+    function collectLocal(txs = []) {
+      const local = [];
+      if (needle) {
+        const lower = needle.toLowerCase();
+        const savingsMatch =
+          !category || category === SAVINGS_CATEGORY.slug;
+        if (savingsMatch) {
+          for (const entry of readSavingsEntries(userId)) {
+            if (!inMonth(entry.date)) continue;
+            const title =
+              entry.direction === "out" ? "From savings" : "To savings";
+            if (matchesSearchNeedle(title, lower, entry.amount)) {
+              local.push({
+                kind:
+                  entry.direction === "out" ? "savings-out" : "savings-in",
+                id: `savings:${entry.id}`,
+                amount: entry.amount,
+                description: title,
+                spentOn: entry.date,
+                people: [],
+              });
+            }
+          }
+        }
+        if (!category) {
+          for (const monthItem of monthList || []) {
+            if (monthFilter && monthItem.month !== monthFilter) continue;
+            for (const entry of readSiteEntries(userId, monthItem.month, 0)) {
+              if (
+                matchesSearchNeedle(
+                  `${entry.title} money in`,
+                  lower,
+                  entry.amount,
+                )
+              ) {
+                local.push({
+                  kind: "money-in",
+                  id: `money-in:${monthItem.month}:${entry.id}`,
+                  amount: entry.amount,
+                  description: entry.title,
+                  spentOn: entry.date,
+                  people: [],
+                });
+              }
+            }
+          }
+        }
+      } else if (category === SAVINGS_CATEGORY.slug || (!category && monthFilter)) {
+        if (!category || category === SAVINGS_CATEGORY.slug) {
+          for (const entry of readSavingsEntries(userId)) {
+            if (!inMonth(entry.date)) continue;
+            if (category && category !== SAVINGS_CATEGORY.slug) continue;
+            local.push({
+              kind: entry.direction === "out" ? "savings-out" : "savings-in",
+              id: `savings:${entry.id}`,
+              amount: entry.amount,
+              description:
+                entry.direction === "out" ? "From savings" : "To savings",
+              spentOn: entry.date,
+              people: [],
+            });
+          }
+        }
+        if (!category) {
+          for (const monthItem of monthList || []) {
+            if (monthFilter && monthItem.month !== monthFilter) continue;
+            for (const entry of readSiteEntries(userId, monthItem.month, 0)) {
+              local.push({
+                kind: "money-in",
+                id: `money-in:${monthItem.month}:${entry.id}`,
+                amount: entry.amount,
+                description: entry.title,
+                spentOn: entry.date,
+                people: [],
+              });
+            }
+          }
+        }
+      }
+      return [...txs, ...local].sort((a, b) => {
+        if (a.spentOn !== b.spentOn) {
+          return String(b.spentOn).localeCompare(String(a.spentOn));
+        }
+        return String(b.id).localeCompare(String(a.id));
+      });
+    }
+
+    if (category === SAVINGS_CATEGORY.slug && !needle) {
+      setResults(collectLocal());
+      setLoading(false);
+      return undefined;
+    }
+
+    setLoading(true);
+    const apiCategory =
+      category && category !== SAVINGS_CATEGORY.slug ? category : "";
+    searchTransactions({
+      q: needle,
+      category: apiCategory,
+      month: monthFilter,
+    })
+      .then((payload) => {
+        if (cancelled) return;
+        const txs = (payload.transactions || []).map((tx) => ({
+          kind: "tx",
+          ...tx,
+        }));
+        setResults(collectLocal(txs));
+        onError("");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setResults([]);
+        onError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needle, category, monthFilter, userId, monthList, onError]);
+
+  const groups = useMemo(() => {
+    const next = [];
+    for (const item of results) {
+      const last = next[next.length - 1];
+      if (!last || last.date !== item.spentOn) {
+        next.push({ date: item.spentOn, items: [item], total: item.amount });
+      } else {
+        last.items.push(item);
+        last.total += item.amount;
+      }
+    }
+    return next;
+  }, [results]);
+
+  const categoryChips = useMemo(() => {
+    const list = (categories || []).map((item) => ({
+      slug: item.slug,
+      name: item.name,
+      color: item.color,
+    }));
+    const savingsTotal = Math.max(0, savingsBalance(readSavingsEntries(userId)));
+    if (savingsTotal > 0) {
+      list.push({
+        slug: SAVINGS_CATEGORY.slug,
+        name: SAVINGS_CATEGORY.name,
+        color: SAVINGS_CATEGORY.color,
+      });
+    }
+    return list;
+  }, [categories, userId]);
+
+  const active = Boolean(needle || category || monthFilter);
+  const selectedName =
+    categoryChips.find((item) => item.slug === category)?.name || "";
+  const selectedMonthLabel = monthFilter ? formatMonth(monthFilter) : "";
+
+  return (
+    <section className="search-panel">
+      <label className="search-field">
+        <span className="sr-only">Search spending</span>
+        <input
+          type="search"
+          value={draft}
+          placeholder="Amount or name…"
+          autoFocus
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </label>
+      {monthChips.length > 0 && (
+        <div className="search-cats" role="group" aria-label="Months">
+          {monthChips.map((key) => {
+            const on = monthFilter === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                className={on ? "search-cat on" : "search-cat"}
+                aria-pressed={on}
+                onClick={() =>
+                  setMonthFilter((current) => (current === key ? "" : key))
+                }
+              >
+                {formatMonth(key)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {categoryChips.length > 0 && (
+        <div className="search-cats" role="group" aria-label="Categories">
+          {categoryChips.map((item) => {
+            const on = category === item.slug;
+            return (
+              <button
+                key={item.slug}
+                type="button"
+                className={on ? "search-cat on" : "search-cat"}
+                aria-pressed={on}
+                onClick={() =>
+                  setCategory((current) =>
+                    current === item.slug ? "" : item.slug,
+                  )
+                }
+              >
+                <span
+                  className="swatch"
+                  style={{ background: item.color }}
+                />
+                {item.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {active && loading && <p className="hint">Searching…</p>}
+      {active && !loading && results.length === 0 && (
+        <p className="empty">
+          {needle
+            ? `No spending matched “${needle}”.`
+            : selectedName
+              ? `No spending in ${selectedName}${selectedMonthLabel ? ` · ${selectedMonthLabel}` : ""} yet.`
+              : selectedMonthLabel
+                ? `No spending in ${selectedMonthLabel} yet.`
+                : "No spending matched."}
+        </p>
+      )}
+      {active && !loading && groups.length > 0 && (
+        <div className="search-results">
+          <p className="hint">
+            {countLines(results.length)}
+            {selectedMonthLabel
+              ? ` · ${selectedMonthLabel}`
+              : " across all months"}
+            {selectedName ? ` · ${selectedName}` : ""}
+          </p>
+          {groups.map((day) => (
+            <section key={day.date} className="day-group">
+              <header className="day">
+                <h3>
+                  {formatDay(day.date)}
+                  <span className="search-month">
+                    {formatMonth(String(day.date || "").slice(0, 7))}
+                  </span>
+                </h3>
+                <strong className="figure">{lek(day.total)}</strong>
+              </header>
+              {day.items.map((item) => {
+                const monthKey = String(item.spentOn || "").slice(0, 7);
+                if (item.kind === "savings-in" || item.kind === "savings-out") {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="search-hit"
+                      onClick={() => onOpenMonth(monthKey)}
+                    >
+                      <SavingsLedgerRow
+                        entry={{
+                          id: item.id,
+                          amount: item.amount,
+                          date: item.spentOn,
+                        }}
+                        direction={
+                          item.kind === "savings-out" ? "out" : "in"
+                        }
+                      />
+                    </button>
+                  );
+                }
+                if (item.kind === "money-in") {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="search-hit"
+                      onClick={() => onOpenMonth(monthKey)}
+                    >
+                      <article className="row money-in">
+                        <div className="row-main">
+                          <span className="row-mark money-in-mark" />
+                          <div>
+                            <h4>{item.description}</h4>
+                            <p className="meta">
+                              <span className="tag">money in</span>
+                            </p>
+                          </div>
+                          <div className="row-side">
+                            <strong className="figure money-in-amt">
+                              + {lek(item.amount)}
+                            </strong>
+                          </div>
+                        </div>
+                      </article>
+                    </button>
+                  );
+                }
+                const color =
+                  categories.find((cat) => cat.slug === item.category)
+                    ?.color || "#8a8175";
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="search-hit"
+                    onClick={() => onOpenMonth(monthKey)}
+                  >
+                    <article className="row">
+                      <div className="row-main">
+                        <span
+                          className="row-mark"
+                          style={{ background: color }}
+                        />
+                        <div>
+                          <h4>{item.description}</h4>
+                          <p className="meta">
+                            {item.people?.length > 0 && (
+                              <span className="tag">
+                                {item.people.join(", ")}
+                              </span>
+                            )}
+                            {item.fixed && (
+                              <span className="tag">fixed payment</span>
+                            )}
+                          </p>
+                        </div>
+                        <div className="row-side">
+                          <strong className="figure">{lek(item.amount)}</strong>
+                        </div>
+                      </div>
+                    </article>
+                  </button>
+                );
+              })}
+            </section>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -3879,7 +4368,8 @@ function ConfigPanel({
           <h3>Remove this ledger</h3>
           <p>
             Wipe{user?.name ? ` ${user.name}'s` : " this"} income, categories,
-            and every line for good. You’ll land back at sign-in after.
+            every line, local savings prefs, and the Hexclave sign-in for good.
+            You’ll land back at create account after.
           </p>
         </div>
         <button
@@ -3888,14 +4378,14 @@ function ConfigPanel({
           disabled={deleting}
           onClick={() => setConfirmDelete(true)}
         >
-          {deleting ? "Deleting…" : "Delete user"}
+          {deleting ? "Deleting…" : "Delete account"}
         </button>
       </div>
 
       {confirmDelete && (
         <ConfirmModal
-          title="Delete user"
-          message={`Delete ${label}? Their income, categories, and lines are removed and cannot be undone.`}
+          title="Delete account"
+          message={`Delete ${label}? The ledger, local savings data, and Hexclave login are removed and cannot be undone.`}
           confirmLabel={deleting ? "Deleting…" : "Delete"}
           busy={deleting}
           onConfirm={confirmDeleteUser}

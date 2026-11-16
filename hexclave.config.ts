@@ -13,6 +13,9 @@ export const config = defineHexclaveConfig({
   auth: {
     allowSignUp: true,
   },
+  users: {
+    allowClientUserDeletion: true,
+  },
   onboarding: {
     requireEmailVerification: true,
   },
