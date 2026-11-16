@@ -71,6 +71,13 @@ function todayKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function todayIso() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 function shiftMonth(key, delta) {
   const [year, month] = key.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1 + delta, 1));
@@ -103,7 +110,99 @@ function mapTx(row) {
     spentOn: row.spent_on,
     weekend: row.weekend,
     fixed: row.fixed,
+    fixedTemplateId: row.fixed_template_id || null,
   };
+}
+
+function mapFixedTemplate(row) {
+  return {
+    id: row.id,
+    amount: row.amount,
+    description: row.description,
+    category: row.category_slug,
+    dayOfMonth: row.day_of_month,
+    active: row.active,
+  };
+}
+
+function daysInMonthKey(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function spentOnForTemplate(monthKey, dayOfMonth) {
+  const last = daysInMonthKey(monthKey);
+  const day = Math.min(Math.max(1, Number(dayOfMonth) || 1), last);
+  return `${monthKey}-${String(day).padStart(2, "0")}`;
+}
+
+async function listFixedTemplates(userId) {
+  const { rows } = await pool.query(
+    `select id, amount, description, category_slug, day_of_month, active
+     from fixed_templates
+     where user_id = $1
+     order by sort_order, id`,
+    [userId],
+  );
+  return rows.map(mapFixedTemplate);
+}
+
+async function ensureFixedForMonth(userId, monthKey) {
+  const bounds = monthBounds(monthKey);
+  if (!bounds) return 0;
+  const today = todayIso();
+  const todayMonth = today.slice(0, 7);
+  // Never post into a future month. For the current month, wait until the day.
+  if (monthKey > todayMonth) return 0;
+
+  const { rows: templates } = await pool.query(
+    `select id, amount, description, category_slug, day_of_month
+     from fixed_templates
+     where user_id = $1 and active = true
+     order by sort_order, id`,
+    [userId],
+  );
+  if (!templates.length) return 0;
+
+  let created = 0;
+  for (const template of templates) {
+    const spentOn = spentOnForTemplate(bounds.key, template.day_of_month);
+    if (monthKey === todayMonth && spentOn > today) continue;
+
+    const exists = await pool.query(
+      `select 1 from transactions
+       where user_id = $1
+         and fixed_template_id = $2
+         and spent_on >= $3::date
+         and spent_on < $4::date
+       limit 1`,
+      [userId, template.id, bounds.start, bounds.next],
+    );
+    if (exists.rowCount) continue;
+
+    const { rows } = await pool.query(
+      "select coalesce(max(sort_order), 0) + 1 as next from transactions where user_id = $1",
+      [userId],
+    );
+    await pool.query(
+      `insert into transactions
+        (user_id, amount, description, category_slug, people, spent_on, weekend, sort_order, fixed, fixed_template_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+      [
+        userId,
+        template.amount,
+        template.description,
+        template.category_slug,
+        [],
+        spentOn,
+        isWeekendIso(spentOn),
+        rows[0].next,
+        template.id,
+      ],
+    );
+    created += 1;
+  }
+  return created;
 }
 
 async function categoryExists(userId, slug) {
@@ -344,7 +443,7 @@ async function loadMonth(userId, month) {
     pool.query(
       `select id, amount, description, category_slug, people,
               to_char(spent_on, 'YYYY-MM-DD') as spent_on,
-              weekend, fixed
+              weekend, fixed, fixed_template_id
        from transactions
        where user_id = $1 and spent_on >= $2 and spent_on < $3
        order by spent_on desc, sort_order desc, id desc`,
@@ -424,6 +523,7 @@ async function loadMonth(userId, month) {
     people: [...personMap.values()].sort((a, b) => b.total - a.total),
     insights,
     transactions,
+    fixedTemplates: await listFixedTemplates(userId),
   };
 }
 
@@ -519,6 +619,7 @@ app.delete("/api/users/me", async (req, res, next) => {
     try {
       await client.query("begin");
       await client.query("delete from transactions where user_id = $1", [user.id]);
+      await client.query("delete from fixed_templates where user_id = $1", [user.id]);
       await client.query("delete from income where user_id = $1", [user.id]);
       await client.query("delete from categories where user_id = $1", [user.id]);
       await client.query("delete from users where id = $1", [user.id]);
@@ -539,7 +640,13 @@ app.delete("/api/users/me", async (req, res, next) => {
 app.get("/api/bootstrap", async (req, res, next) => {
   try {
     const user = await resolveUserId(req);
-    res.json(await loadMonth(user.id, req.query.month));
+    const summaries = await monthSummaries(user.id);
+    const openMonth = summaries[0]?.month || todayKey();
+    const requested = String(req.query.month || "").trim();
+    const target = requested || openMonth;
+    await ensureFixedForMonth(user.id, openMonth);
+    if (target !== openMonth) await ensureFixedForMonth(user.id, target);
+    res.json(await loadMonth(user.id, requested || undefined));
   } catch (error) {
     next(error);
   }
@@ -625,7 +732,205 @@ app.post("/api/months", async (req, res, next) => {
     const latest = summaries[0] || null;
     const key = resolveNextMonth(latest, Boolean(req.body?.force));
     if (!latest || key !== latest.month) await ensureIncome(user.id, key);
+    await ensureFixedForMonth(user.id, key);
     res.status(201).json(await loadMonth(user.id, key));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/fixed-templates", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    res.json({ templates: await listFixedTemplates(user.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/fixed-templates", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const amount = parseAmountInput(req.body?.amount);
+    const category = String(req.body?.category || "");
+    const dayOfMonth = Number(req.body?.dayOfMonth);
+    let description = String(req.body?.description || "").trim().replace(/\s+/g, " ");
+    if (!amount || !await categoryExists(user.id, category)) {
+      return res.status(400).json({ error: "Amount and category are required." });
+    }
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+      return res.status(400).json({ error: "Pick a day of the month from 1 to 31." });
+    }
+    if (!description) {
+      const named = await pool.query(
+        "select name from categories where user_id = $1 and slug = $2",
+        [user.id, category],
+      );
+      description = named.rows[0]?.name || "Fixed";
+    }
+    if (description.length > 180) {
+      return res.status(400).json({ error: "Write a shorter note." });
+    }
+    const { rows: orderRows } = await pool.query(
+      "select coalesce(max(sort_order), 0) + 1 as next from fixed_templates where user_id = $1",
+      [user.id],
+    );
+    const { rows } = await pool.query(
+      `insert into fixed_templates
+        (user_id, amount, description, category_slug, day_of_month, active, sort_order)
+       values ($1, $2, $3, $4, $5, true, $6)
+       returning id, amount, description, category_slug, day_of_month, active`,
+      [user.id, amount, description, category, dayOfMonth, orderRows[0].next],
+    );
+    const summaries = await monthSummaries(user.id);
+    const openMonth = summaries[0]?.month || todayKey();
+    await ensureIncome(user.id, openMonth);
+    await ensureFixedForMonth(user.id, openMonth);
+    res.status(201).json({
+      template: mapFixedTemplate(rows[0]),
+      templates: await listFixedTemplates(user.id),
+      ledger: await loadMonth(user.id, openMonth),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/fixed-templates/:id", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const id = Number(req.params.id);
+    const current = await pool.query(
+      `select id, amount, description, category_slug, day_of_month, active
+       from fixed_templates where id = $1 and user_id = $2`,
+      [id, user.id],
+    );
+    if (!current.rows[0]) {
+      return res.status(404).json({ error: "That fixed payment is gone." });
+    }
+
+    const fields = [];
+    const values = [];
+    const set = (column, value) => {
+      values.push(value);
+      fields.push(`${column} = $${values.length}`);
+    };
+
+    if (req.body?.amount != null) {
+      const amount = parseAmountInput(req.body.amount);
+      if (!amount) return res.status(400).json({ error: "Enter the amount as a whole number." });
+      set("amount", amount);
+    }
+    if (req.body?.description != null) {
+      const description = String(req.body.description).trim().replace(/\s+/g, " ");
+      if (!description || description.length > 180) {
+        return res.status(400).json({ error: "Write what the money was for." });
+      }
+      set("description", description);
+    }
+    if (req.body?.category != null) {
+      const category = String(req.body.category);
+      if (!await categoryExists(user.id, category)) {
+        return res.status(400).json({ error: "That category does not exist." });
+      }
+      set("category_slug", category);
+    }
+    if (req.body?.dayOfMonth != null) {
+      const dayOfMonth = Number(req.body.dayOfMonth);
+      if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+        return res.status(400).json({ error: "Pick a day of the month from 1 to 31." });
+      }
+      set("day_of_month", dayOfMonth);
+    }
+    if (req.body?.active != null) {
+      set("active", Boolean(req.body.active));
+    }
+
+    if (fields.length) {
+      values.push(id);
+      values.push(user.id);
+      await pool.query(
+        `update fixed_templates set ${fields.join(", ")}
+         where id = $${values.length - 1} and user_id = $${values.length}`,
+        values,
+      );
+    }
+
+    const updated = await pool.query(
+      `select id, amount, description, category_slug, day_of_month, active
+       from fixed_templates where id = $1 and user_id = $2`,
+      [id, user.id],
+    );
+    const template = mapFixedTemplate(updated.rows[0]);
+    const summaries = await monthSummaries(user.id);
+    const openMonth = summaries[0]?.month || todayKey();
+
+    if (template.active) {
+      const openBounds = monthBounds(openMonth);
+      const existing = await pool.query(
+        `select id from transactions
+         where user_id = $1 and fixed_template_id = $2
+           and spent_on >= $3::date and spent_on < $4::date
+         limit 1`,
+        [user.id, id, openBounds.start, openBounds.next],
+      );
+      if (existing.rows[0]) {
+        const spentOn = spentOnForTemplate(openMonth, template.dayOfMonth);
+        await pool.query(
+          `update transactions
+           set amount = $1,
+               description = $2,
+               category_slug = $3,
+               spent_on = $4,
+               weekend = $5,
+               fixed = true
+           where id = $6 and user_id = $7`,
+          [
+            template.amount,
+            template.description,
+            template.category,
+            spentOn,
+            isWeekendIso(spentOn),
+            existing.rows[0].id,
+            user.id,
+          ],
+        );
+      } else {
+        await ensureFixedForMonth(user.id, openMonth);
+      }
+    }
+
+    res.json({
+      template,
+      templates: await listFixedTemplates(user.id),
+      ledger: await loadMonth(user.id, openMonth),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/fixed-templates/:id", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const id = Number(req.params.id);
+    const current = await pool.query(
+      "select id from fixed_templates where id = $1 and user_id = $2",
+      [id, user.id],
+    );
+    if (!current.rows[0]) {
+      return res.status(404).json({ error: "That fixed payment is gone." });
+    }
+    await pool.query("delete from fixed_templates where id = $1 and user_id = $2", [
+      id,
+      user.id,
+    ]);
+    const summaries = await monthSummaries(user.id);
+    const openMonth = summaries[0]?.month || todayKey();
+    res.json({
+      templates: await listFixedTemplates(user.id),
+      ledger: await loadMonth(user.id, openMonth),
+    });
   } catch (error) {
     next(error);
   }
@@ -703,7 +1008,7 @@ app.get("/api/transactions/search", async (req, res, next) => {
     const { rows } = await pool.query(
       `select id, amount, description, category_slug, people,
               to_char(spent_on, 'YYYY-MM-DD') as spent_on,
-              weekend, fixed
+              weekend, fixed, fixed_template_id
        from transactions
        where user_id = $1
          and ($4 = '' or category_slug = $4)
@@ -757,11 +1062,42 @@ app.post("/api/transactions", async (req, res, next) => {
       [user.id],
     );
     await ensureIncome(user.id, spentOn.slice(0, 7));
+    const isFixed = Boolean(req.body?.fixed);
+    let fixedTemplateId = null;
+    if (isFixed) {
+      const dayOfMonth = Math.min(
+        31,
+        Math.max(1, Number(spentOn.slice(-2)) || 1),
+      );
+      const { rows: orderRows } = await pool.query(
+        "select coalesce(max(sort_order), 0) + 1 as next from fixed_templates where user_id = $1",
+        [user.id],
+      );
+      const created = await pool.query(
+        `insert into fixed_templates
+          (user_id, amount, description, category_slug, day_of_month, active, sort_order)
+         values ($1, $2, $3, $4, $5, true, $6)
+         returning id`,
+        [user.id, amount, description, category, dayOfMonth, orderRows[0].next],
+      );
+      fixedTemplateId = created.rows[0].id;
+    }
     await pool.query(
       `insert into transactions
-        (user_id, amount, description, category_slug, people, spent_on, weekend, sort_order, fixed)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [user.id, amount, description, category, [], spentOn, isWeekendIso(spentOn), rows[0].next, Boolean(req.body?.fixed)],
+        (user_id, amount, description, category_slug, people, spent_on, weekend, sort_order, fixed, fixed_template_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        user.id,
+        amount,
+        description,
+        category,
+        [],
+        spentOn,
+        isWeekendIso(spentOn),
+        rows[0].next,
+        isFixed,
+        fixedTemplateId,
+      ],
     );
     res.status(201).json(await loadMonth(user.id, spentOn.slice(0, 7)));
   } catch (error) {

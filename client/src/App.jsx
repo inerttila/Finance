@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useHexclaveApp } from "@hexclave/react";
 import {
   createCategory,
+  createFixedTemplate,
   createTransaction,
   createUser,
   deleteCurrentUser,
+  deleteFixedTemplate,
   deleteTransaction,
   getBootstrap,
   getCategoryDefaults,
@@ -59,11 +61,31 @@ const DEFAULT_HERO_PREFS = {
 
 const HERO_PREF_OPTIONS = [
   { key: "showNetLine", label: "Income line", hint: "of X income" },
-  { key: "showCarry", label: "Carry & money in", hint: "Extra money still on hand" },
-  { key: "showBar", label: "Spend bar", hint: "How much of the income is used" },
-  { key: "showSpentLine", label: "Spent summary", hint: "Total spent across lines" },
-  { key: "showBreakdown", label: "Breakdown", hint: "Day to day, people, fixed" },
-  { key: "showEditLinks", label: "Money in", hint: "Add money in on the Home card" },
+  {
+    key: "showCarry",
+    label: "Carry & money in",
+    hint: "Extra money still on hand",
+  },
+  {
+    key: "showBar",
+    label: "Spend bar",
+    hint: "How much of the income is used",
+  },
+  {
+    key: "showSpentLine",
+    label: "Spent summary",
+    hint: "Total spent across lines",
+  },
+  {
+    key: "showBreakdown",
+    label: "Breakdown",
+    hint: "Day to day, people, fixed",
+  },
+  {
+    key: "showEditLinks",
+    label: "Money in",
+    hint: "Add money in on the Home card",
+  },
 ];
 
 const DEFAULT_SITE_TITLE = "Added money";
@@ -222,7 +244,13 @@ function savingsMonthFlow(entries, month) {
   return { monthIn, monthOut };
 }
 
-function addSavingsTransfer(userId, amount, date, direction, accountLeft = Infinity) {
+function addSavingsTransfer(
+  userId,
+  amount,
+  date,
+  direction,
+  accountLeft = Infinity,
+) {
   const entries = readSavingsEntries(userId);
   const balance = savingsBalance(entries);
   if (!Number.isInteger(amount) || amount <= 0) {
@@ -308,11 +336,55 @@ function writeHeroPrefs(userId, prefs) {
   localStorage.setItem(heroPrefsKey(userId), JSON.stringify(prefs));
 }
 
+const DEFAULT_QUICK_CATEGORY_SLUGS = [
+  "coffee",
+  "eating-out",
+  "groceries",
+  "fuel",
+  "home",
+  "other",
+];
+
+function quickCategoriesKey(userId) {
+  return `finance-quick-categories:${userId || "anon"}`;
+}
+
+function readQuickCategorySlugs(userId, categories = []) {
+  const available = new Set(categories.map((item) => item.slug));
+  try {
+    const raw = localStorage.getItem(quickCategoriesKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed
+          .map((slug) => String(slug || "").trim())
+          .filter((slug) => slug && (!available.size || available.has(slug)));
+        if (cleaned.length) return cleaned.slice(0, 8);
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  const defaults = DEFAULT_QUICK_CATEGORY_SLUGS.filter(
+    (slug) => !available.size || available.has(slug),
+  );
+  if (defaults.length) return defaults;
+  return categories.slice(0, 6).map((item) => item.slug);
+}
+
+function writeQuickCategorySlugs(userId, slugs) {
+  localStorage.setItem(
+    quickCategoriesKey(userId),
+    JSON.stringify(slugs.slice(0, 8)),
+  );
+}
+
 function clearFinanceLocalData(userId) {
   const id = userId || "anon";
   const exact = new Set([
     savingsKey(id),
     heroPrefsKey(id),
+    quickCategoriesKey(id),
     `finance-pie-open:${id}`,
     `finance-categories-open:${id}`,
   ]);
@@ -325,7 +397,10 @@ function clearFinanceLocalData(userId) {
       if (exact.has(key) || key.startsWith(sitePrefix)) keys.push(key);
     }
     for (const key of keys) localStorage.removeItem(key);
-    if (String(localStorage.getItem("finance-user-id") || "") === String(userId || "")) {
+    if (
+      String(localStorage.getItem("finance-user-id") || "") ===
+      String(userId || "")
+    ) {
       localStorage.removeItem("finance-user-id");
     }
   } catch {
@@ -468,9 +543,7 @@ export default function App() {
     // Month is always set after a successful fetch/applyPayload, so empty
     // month means we still need to resolve the open month from the API.
     const alreadyLoaded =
-      Boolean(month)
-      && current?.user?.id === userId
-      && current.month === month;
+      Boolean(month) && current?.user?.id === userId && current.month === month;
 
     if (!forceReload && alreadyLoaded) {
       setError("");
@@ -540,7 +613,9 @@ export default function App() {
     try {
       await hexclave.redirectToSignIn();
     } catch (err) {
-      setError(err.humanReadableMessage || err.message || "Could not open sign in.");
+      setError(
+        err.humanReadableMessage || err.message || "Could not open sign in.",
+      );
       setAuthBusy(false);
     }
   }
@@ -552,7 +627,9 @@ export default function App() {
     try {
       await hexclave.redirectToSignUp();
     } catch (err) {
-      setError(err.humanReadableMessage || err.message || "Could not open sign up.");
+      setError(
+        err.humanReadableMessage || err.message || "Could not open sign up.",
+      );
       setAuthBusy(false);
     }
   }
@@ -572,7 +649,9 @@ export default function App() {
       setUserMenuOpen(false);
       setScreen("auth");
     } catch (err) {
-      setError(err.humanReadableMessage || err.message || "Could not sign out.");
+      setError(
+        err.humanReadableMessage || err.message || "Could not sign out.",
+      );
     } finally {
       setAuthBusy(false);
     }
@@ -598,7 +677,9 @@ export default function App() {
       await hexclave.redirectToAccountSettings();
     } catch (err) {
       setError(
-        err.humanReadableMessage || err.message || "Could not open account settings.",
+        err.humanReadableMessage ||
+          err.message ||
+          "Could not open account settings.",
       );
       setAuthBusy(false);
     }
@@ -846,9 +927,9 @@ export default function App() {
   }, [screen, openMonthKey]);
 
   if (
-    !bootReady
-    || screen === "boot"
-    || (screen === "app" && !data && !error)
+    !bootReady ||
+    screen === "boot" ||
+    (screen === "app" && !data && !error)
   ) {
     return <BootScreen onReady={() => setBootReady(true)} />;
   }
@@ -861,11 +942,7 @@ export default function App() {
             {error}
           </p>
         )}
-        <AuthGate
-          busy={authBusy}
-          onSignIn={onSignIn}
-          onSignUp={onSignUp}
-        />
+        <AuthGate busy={authBusy} onSignIn={onSignIn} onSignUp={onSignUp} />
       </div>
     );
   }
@@ -905,8 +982,7 @@ export default function App() {
     return <BootScreen onReady={() => setBootReady(true)} />;
   }
 
-  const canAdd =
-    data && (!data.closed || data.month === data.pastMonth);
+  const canAdd = data && (!data.closed || data.month === data.pastMonth);
 
   return (
     <div className="page page-app">
@@ -926,7 +1002,9 @@ export default function App() {
           )}
           <div className="brand">
             <span>Net</span>
-            <small>{currentUser?.name ? currentUser.name : "monthly spending"}</small>
+            <small>
+              {currentUser?.name ? currentUser.name : "monthly spending"}
+            </small>
           </div>
         </div>
 
@@ -937,7 +1015,12 @@ export default function App() {
               label: "Home",
               tone: "home",
               icon: (
-                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
                   <path
                     fill="currentColor"
                     d="M12 3.2 3.5 10.4V21h6.2v-6.2h4.6V21h6.2V10.4L12 3.2zm0 2.5 6.3 5.3V19h-2.6v-6.2H8.3V19H5.7v-8L12 5.7z"
@@ -950,7 +1033,12 @@ export default function App() {
               label: "Expenses",
               tone: "expenses",
               icon: (
-                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
                   <path
                     fill="currentColor"
                     d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 2v14h14V5H5zm3 3h8v2H8V8zm0 4h8v2H8v-2zm0 4h5v2H8v-2z"
@@ -963,7 +1051,12 @@ export default function App() {
               label: "Search",
               tone: "search",
               icon: (
-                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
                   <path
                     fill="currentColor"
                     d="M10 3a7 7 0 0 1 5.5 11.2l4.2 4.1-1.4 1.4-4.1-4.2A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z"
@@ -976,7 +1069,12 @@ export default function App() {
               label: "Config",
               tone: "config",
               icon: (
-                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
                   <path
                     fill="currentColor"
                     d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.22-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.22 1.13-.54 1.63-.94l2.39.96c.23.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
@@ -1011,7 +1109,12 @@ export default function App() {
               aria-label="Scan fiscal QR"
               onClick={() => setScanOpen(true)}
             >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                aria-hidden="true"
+              >
                 <path
                   fill="currentColor"
                   d="M3 3h7v2H5v5H3V3zm11 0h7v7h-2V5h-5V3zM3 14h2v5h5v2H3v-7zm16 0h2v7h-7v-2h5v-5zM7 7h4v4H7V7zm6 0h4v4h-4V7zM7 13h4v4H7v-4zm6 3h1v1h-1v-1zm2-3h1v1h-1v-1zm0 2h1v1h-1v-1zm2-2h1v4h-1v-4z"
@@ -1050,9 +1153,7 @@ export default function App() {
 
         {data?.closed && (
           <div className="top-month-bar">
-            <p className="month-label">
-              {formatMonth(data.month)} · past
-            </p>
+            <p className="month-label">{formatMonth(data.month)} · past</p>
             <button
               type="button"
               className="btn"
@@ -1358,6 +1459,7 @@ export default function App() {
             remaining={effectiveRemaining}
             heroPrefs={heroPrefs}
             savingsEntries={savingsEntries}
+            fixedTemplates={data.fixedTemplates || []}
             onSavingsChange={() => setSavingsTick((value) => value + 1)}
             onHeroPref={updateHeroPref}
             onSaved={(payload) => {
@@ -1405,12 +1507,12 @@ export default function App() {
       {addTarget && data && (
         <AddExpenseModal
           key={`${addTarget}-${data.month}`}
+          userId={userId}
           categories={data.categories}
           monthKey={addTarget === "past" ? data.month : data.openMonth}
           onClose={() => setAddTarget(null)}
           onSaved={(payload) => {
             applyPayload(payload);
-            setAddTarget(null);
           }}
           onError={setError}
         />
@@ -1474,13 +1576,7 @@ function readCategoriesOpen(userId) {
   return raw === "1";
 }
 
-function CategoriesRail({
-  userId,
-  categories,
-  spent,
-  active,
-  onSelect,
-}) {
+function CategoriesRail({ userId, categories, spent, active, onSelect }) {
   const [open, setOpen] = useState(() => readCategoriesOpen(userId));
 
   useEffect(() => {
@@ -1520,8 +1616,7 @@ function CategoriesRail({
       </button>
       <div className="categories-fold-body" id="categories-fold-body">
         <p className="hint">
-          Grouped from the words on each line. Change a row if a guess is
-          wrong.
+          Grouped from the words on each line. Change a row if a guess is wrong.
         </p>
         <div className="cat-list">
           {rows.map((item) => {
@@ -1534,10 +1629,7 @@ function CategoriesRail({
                 aria-pressed={selected}
                 onClick={() => onSelect(item.slug)}
               >
-                <span
-                  className="swatch"
-                  style={{ background: item.color }}
-                />
+                <span className="swatch" style={{ background: item.color }} />
                 <span className="cat-name">
                   {item.name}
                   <small>{item.count}</small>
@@ -1620,8 +1712,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
       const local = [];
       if (needle) {
         const lower = needle.toLowerCase();
-        const savingsMatch =
-          !category || category === SAVINGS_CATEGORY.slug;
+        const savingsMatch = !category || category === SAVINGS_CATEGORY.slug;
         if (savingsMatch) {
           for (const entry of readSavingsEntries(userId)) {
             if (!inMonth(entry.date)) continue;
@@ -1629,8 +1720,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
               entry.direction === "out" ? "From savings" : "To savings";
             if (matchesSearchNeedle(title, lower, entry.amount)) {
               local.push({
-                kind:
-                  entry.direction === "out" ? "savings-out" : "savings-in",
+                kind: entry.direction === "out" ? "savings-out" : "savings-in",
                 id: `savings:${entry.id}`,
                 amount: entry.amount,
                 description: title,
@@ -1663,7 +1753,10 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
             }
           }
         }
-      } else if (category === SAVINGS_CATEGORY.slug || (!category && monthFilter)) {
+      } else if (
+        category === SAVINGS_CATEGORY.slug ||
+        (!category && monthFilter)
+      ) {
         if (!category || category === SAVINGS_CATEGORY.slug) {
           for (const entry of readSavingsEntries(userId)) {
             if (!inMonth(entry.date)) continue;
@@ -1759,7 +1852,10 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
       name: item.name,
       color: item.color,
     }));
-    const savingsTotal = Math.max(0, savingsBalance(readSavingsEntries(userId)));
+    const savingsTotal = Math.max(
+      0,
+      savingsBalance(readSavingsEntries(userId)),
+    );
     if (savingsTotal > 0) {
       list.push({
         slug: SAVINGS_CATEGORY.slug,
@@ -1823,10 +1919,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
                   )
                 }
               >
-                <span
-                  className="swatch"
-                  style={{ background: item.color }}
-                />
+                <span className="swatch" style={{ background: item.color }} />
                 {item.name}
               </button>
             );
@@ -1881,9 +1974,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
                           amount: item.amount,
                           date: item.spentOn,
                         }}
-                        direction={
-                          item.kind === "savings-out" ? "out" : "in"
-                        }
+                        direction={item.kind === "savings-out" ? "out" : "in"}
                       />
                     </button>
                   );
@@ -1916,8 +2007,8 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
                   );
                 }
                 const color =
-                  categories.find((cat) => cat.slug === item.category)
-                    ?.color || "#8a8175";
+                  categories.find((cat) => cat.slug === item.category)?.color ||
+                  "#8a8175";
                 return (
                   <button
                     key={item.id}
@@ -1992,7 +2083,16 @@ function CategoryPie({
     const mid = start + sweep / 2;
     angle = end;
     const [lx, ly] = polar(cx, cy, radius * 0.62, mid);
-    return { ...item, start, end, mid, portion, lx, ly, showLabel: portion >= 0.08 };
+    return {
+      ...item,
+      start,
+      end,
+      mid,
+      portion,
+      lx,
+      ly,
+      showLabel: portion >= 0.08,
+    };
   });
 
   function toggleOpen() {
@@ -2004,7 +2104,11 @@ function CategoryPie({
   }
 
   return (
-    <div className={open ? "rail-block category-pie" : "rail-block category-pie folded"}>
+    <div
+      className={
+        open ? "rail-block category-pie" : "rail-block category-pie folded"
+      }
+    >
       <button
         type="button"
         className="pie-toggle"
@@ -3196,7 +3300,10 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
   const bounds = monthDayBounds(monthKey);
 
   return (
-    <div className="modal-back add-back" onClick={() => !loading && !saving && onClose()}>
+    <div
+      className="modal-back add-back"
+      onClick={() => !loading && !saving && onClose()}
+    >
       <div
         className="modal add-sheet scan-sheet"
         role="dialog"
@@ -3345,7 +3452,36 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
   );
 }
 
-function AddExpenseModal({ categories, monthKey, onClose, onSaved, onError }) {
+const SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function formatAddDate(iso) {
+  const [year, month, day] = iso.split("-").map(Number);
+  return `${SHORT_MONTHS[month - 1]} ${day}, ${year}`;
+}
+
+function AddExpenseModal({
+  userId,
+  categories,
+  monthKey,
+  onClose,
+  onSaved,
+  onError,
+}) {
+  const [flash, setFlash] = useState("");
+
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -3359,6 +3495,12 @@ function AddExpenseModal({ categories, monthKey, onClose, onSaved, onError }) {
     };
   }, [onClose]);
 
+  useEffect(() => {
+    if (!flash) return undefined;
+    const id = setTimeout(() => setFlash(""), 1600);
+    return () => clearTimeout(id);
+  }, [flash]);
+
   return (
     <div className="modal-back add-back" onClick={onClose}>
       <div
@@ -3368,22 +3510,14 @@ function AddExpenseModal({ categories, monthKey, onClose, onSaved, onError }) {
         aria-labelledby="add-expense-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="add-sheet-head">
-          <h2 id="add-expense-title">Add expense</h2>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            ×
-          </button>
-        </div>
         <AddForm
+          userId={userId}
           categories={categories}
           monthKey={monthKey}
-          onCancel={onClose}
+          onClose={onClose}
           onSaved={onSaved}
+          flash={flash}
+          onAdded={(amount) => setFlash(`Added ${lek(amount)}`)}
           onError={onError}
         />
       </div>
@@ -3391,15 +3525,65 @@ function AddExpenseModal({ categories, monthKey, onClose, onSaved, onError }) {
   );
 }
 
-function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
+function AddForm({
+  userId,
+  categories,
+  monthKey,
+  onClose,
+  onSaved,
+  flash,
+  onAdded,
+  onError,
+}) {
   const bounds = monthDayBounds(monthKey);
+  const amountRef = useRef(null);
+  const dateRef = useRef(null);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("other");
+  const [category, setCategory] = useState(
+    () =>
+      categories.find((item) => item.slug === "other")?.slug ||
+      categories[0]?.slug ||
+      "other",
+  );
   const [spentOn, setSpentOn] = useState(() => defaultDateInMonth(monthKey));
   const [fixed, setFixed] = useState(false);
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showAllCats, setShowAllCats] = useState(false);
+  const [editingQuick, setEditingQuick] = useState(false);
+  const [quickSlugs, setQuickSlugs] = useState(() =>
+    readQuickCategorySlugs(userId, categories),
+  );
+  const [dragSlug, setDragSlug] = useState(null);
+  const [overSlug, setOverSlug] = useState(null);
+  const dragSlugRef = useRef(null);
+
+  const bySlug = useMemo(
+    () => new Map(categories.map((item) => [item.slug, item])),
+    [categories],
+  );
+
+  const quickCategories = useMemo(
+    () => quickSlugs.map((slug) => bySlug.get(slug)).filter(Boolean),
+    [bySlug, quickSlugs],
+  );
+
+  const moreCategories = useMemo(() => {
+    const quick = new Set(quickSlugs);
+    return categories.filter((item) => !quick.has(item.slug));
+  }, [categories, quickSlugs]);
+
+  const visibleCategories =
+    showAllCats || editingQuick
+      ? [...quickCategories, ...moreCategories]
+      : quickCategories;
+
+  const selectedCategory = bySlug.get(category);
+
+  useEffect(() => {
+    setQuickSlugs(readQuickCategorySlugs(userId, categories));
+  }, [userId, categories]);
 
   useEffect(() => {
     if (touched || !description.trim()) return undefined;
@@ -3411,25 +3595,118 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
     return () => clearTimeout(handle);
   }, [description, touched]);
 
-  async function onSubmit(event) {
-    event.preventDefault();
-    const parsed = parseMoney(amount);
-    if (!parsed || !description.trim()) {
-      onError("Enter an amount and what it was for.");
+  useEffect(() => {
+    if (showAllCats || editingQuick) return;
+    if (quickSlugs.includes(category)) return;
+    if (moreCategories.some((item) => item.slug === category)) {
+      setShowAllCats(true);
+    }
+  }, [category, editingQuick, moreCategories, quickSlugs, showAllCats]);
+
+  function persistQuick(next) {
+    const cleaned = next.filter((slug) => bySlug.has(slug)).slice(0, 8);
+    setQuickSlugs(cleaned);
+    writeQuickCategorySlugs(userId, cleaned);
+    return cleaned;
+  }
+
+  function pickCategory(slug) {
+    if (editingQuick) return;
+    setTouched(true);
+    setCategory(slug);
+  }
+
+  function reorderQuick(fromSlug, toSlug) {
+    if (!fromSlug || !toSlug || fromSlug === toSlug) return;
+    setQuickSlugs((prev) => {
+      const from = prev.indexOf(fromSlug);
+      const to = prev.indexOf(toSlug);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      writeQuickCategorySlugs(userId, next);
+      return next;
+    });
+  }
+
+  function toggleQuick(slug) {
+    if (quickSlugs.includes(slug)) {
+      if (quickSlugs.length <= 1) return;
+      persistQuick(quickSlugs.filter((item) => item !== slug));
       return;
     }
+    if (quickSlugs.length >= 8) return;
+    persistQuick([...quickSlugs, slug]);
+  }
+
+  function onQuickDragStart(event, slug) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragSlugRef.current = slug;
+    setDragSlug(slug);
+    setOverSlug(slug);
+  }
+
+  function onQuickDragMove(event) {
+    const from = dragSlugRef.current;
+    if (!from) return;
+    const node = document.elementFromPoint(event.clientX, event.clientY);
+    const chip = node?.closest?.("[data-quick-slug]");
+    const slug = chip?.getAttribute("data-quick-slug");
+    if (!slug) return;
+    setOverSlug(slug);
+    if (slug !== from) reorderQuick(from, slug);
+  }
+
+  function onQuickDragEnd() {
+    dragSlugRef.current = null;
+    setDragSlug(null);
+    setOverSlug(null);
+  }
+
+  function openDatePicker() {
+    const input = dateRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === "function") {
+      try {
+        input.showPicker();
+        return;
+      } catch {
+        // fall through to focus/click
+      }
+    }
+    input.focus();
+    input.click();
+  }
+
+  async function onSubmit(event) {
+    event.preventDefault();
+    if (editingQuick) return;
+    const parsed = parseMoney(amount);
+    if (!parsed) {
+      onError("Enter an amount.");
+      return;
+    }
+    const note =
+      description.trim() || selectedCategory?.name || category || "Other";
     setSaving(true);
     try {
       onSaved(
         await createTransaction({
           amount: parsed,
-          description: description.trim(),
+          description: note,
           category,
           spentOn,
           fixed,
         }),
       );
       onError("");
+      onAdded?.(parsed);
+      setAmount("");
+      setDescription("");
+      setTouched(false);
+      requestAnimationFrame(() => amountRef.current?.focus());
     } catch (err) {
       onError(err.message);
     } finally {
@@ -3439,69 +3716,276 @@ function AddForm({ categories, monthKey, onCancel, onSaved, onError }) {
 
   return (
     <form className="editor add-form" onSubmit={onSubmit}>
-      <p className="hint month-form-note">
-        This line is saved in {formatMonth(monthKey)}.
-      </p>
-      <label>
-        Amount
+      <div className="add-sheet-head">
+        <div className="add-sheet-titles">
+          <h2 id="add-expense-title">Add expense</h2>
+          {flash ? <p className="add-flash">{flash}</p> : null}
+        </div>
+        <div className="add-head-meta">
+          <button
+            type="button"
+            className="add-date-btn"
+            onClick={openDatePicker}
+            aria-label={`Date ${formatAddDate(spentOn)}. Change date`}
+          >
+            <span className="add-date-ico" aria-hidden="true">
+              ▤
+            </span>
+            <span>{formatAddDate(spentOn)}</span>
+            <span className="add-date-edit" aria-hidden="true">
+              ✎
+            </span>
+          </button>
+          <button
+            type="button"
+            className={fixed ? "add-fixed-pill on" : "add-fixed-pill"}
+            aria-pressed={fixed}
+            onClick={() => setFixed((value) => !value)}
+          >
+            Fixed
+          </button>
+        </div>
         <input
-          value={amount}
-          inputMode="numeric"
-          placeholder="1500"
-          autoFocus
-          onChange={(event) => setAmount(event.target.value)}
-        />
-      </label>
-      <label className="grow">
-        What it was
-        <input
-          value={description}
-          placeholder="kafe, market, naft…"
-          onChange={(event) => setDescription(event.target.value)}
-        />
-      </label>
-      <label>
-        Category
-        <select
-          value={category}
-          onChange={(event) => {
-            setTouched(true);
-            setCategory(event.target.value);
-          }}
-        >
-          {categories.map((item) => (
-            <option key={item.slug} value={item.slug}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Date
-        <input
+          ref={dateRef}
+          className="add-date-input"
           type="date"
           min={bounds.min}
           max={bounds.max}
           value={spentOn}
+          tabIndex={-1}
+          aria-hidden="true"
           onChange={(event) => setSpentOn(event.target.value)}
         />
-      </label>
-      <div className="editor-actions">
-        <label className="fixed-check fixed-check-inline">
-          <input
-            type="checkbox"
-            checked={fixed}
-            onChange={(event) => setFixed(event.target.checked)}
-          />
-          Fixed
-        </label>
-        <button className="btn primary" type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Add"}
-        </button>
-        <button className="btn" type="button" onClick={onCancel}>
-          Cancel
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          ×
         </button>
       </div>
+
+      <label className="add-amount">
+        Amount
+        <input
+          ref={amountRef}
+          value={amount}
+          inputMode="numeric"
+          placeholder="1 500"
+          autoFocus
+          onChange={(event) => setAmount(event.target.value)}
+        />
+      </label>
+
+      <div className="add-cats-block">
+        <div className="add-cats-head">
+          <span>Category</span>
+          {editingQuick ? (
+            <button
+              type="button"
+              className="add-cats-all"
+              onClick={() => setEditingQuick(false)}
+            >
+              Done
+            </button>
+          ) : null}
+        </div>
+        {editingQuick ? (
+          <>
+            <p className="hint add-cats-hint">
+              Drag to rank · tap to pin or unpin · up to 8
+            </p>
+            <div
+              className={
+                dragSlug
+                  ? "add-cats add-cats-quick is-dragging"
+                  : "add-cats add-cats-quick"
+              }
+              role="list"
+              aria-label="Quick categories"
+            >
+              {quickCategories.map((item) => {
+                const dragging = dragSlug === item.slug;
+                const over =
+                  overSlug === item.slug && dragSlug && dragSlug !== item.slug;
+                return (
+                  <div
+                    key={item.slug}
+                    role="listitem"
+                    data-quick-slug={item.slug}
+                    className={[
+                      "add-cat",
+                      "on",
+                      "add-cat-drag",
+                      dragging ? "dragging" : "",
+                      over ? "drag-over" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <button
+                      type="button"
+                      className="add-cat-handle"
+                      aria-label={`Drag ${item.name}`}
+                      onPointerDown={(event) =>
+                        onQuickDragStart(event, item.slug)
+                      }
+                      onPointerMove={onQuickDragMove}
+                      onPointerUp={onQuickDragEnd}
+                      onPointerCancel={onQuickDragEnd}
+                    >
+                      ⠿
+                    </button>
+                    <span
+                      className="add-cat-dot"
+                      style={{
+                        background: `${item.color}22`,
+                        color: item.color,
+                      }}
+                      aria-hidden="true"
+                    >
+                      <span style={{ background: item.color }} />
+                    </span>
+                    <span className="add-cat-name">{item.name}</span>
+                    <button
+                      type="button"
+                      className="add-cat-unpin"
+                      aria-label={`Unpin ${item.name}`}
+                      disabled={quickSlugs.length <= 1}
+                      onClick={() => toggleQuick(item.slug)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {moreCategories.length > 0 ? (
+              <div className="add-cats-more-block">
+                <span className="add-cats-more-label">Tap to pin</span>
+                <div
+                  className="add-cats"
+                  role="group"
+                  aria-label="More categories"
+                >
+                  {moreCategories.map((item) => (
+                    <button
+                      key={item.slug}
+                      type="button"
+                      className="add-cat"
+                      disabled={quickSlugs.length >= 8}
+                      onClick={() => toggleQuick(item.slug)}
+                    >
+                      <span
+                        className="add-cat-dot"
+                        style={{
+                          background: `${item.color}22`,
+                          color: item.color,
+                        }}
+                        aria-hidden="true"
+                      >
+                        <span style={{ background: item.color }} />
+                      </span>
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="add-cats" role="group" aria-label="Category">
+              {visibleCategories.map((item) => {
+                const on = category === item.slug;
+                return (
+                  <button
+                    key={item.slug}
+                    type="button"
+                    className={on ? "add-cat on" : "add-cat"}
+                    aria-pressed={on}
+                    onClick={() => pickCategory(item.slug)}
+                  >
+                    <span
+                      className="add-cat-dot"
+                      style={{
+                        background: `${item.color}22`,
+                        color: item.color,
+                      }}
+                      aria-hidden="true"
+                    >
+                      <span style={{ background: item.color }} />
+                    </span>
+                    {item.name}
+                    {on ? (
+                      <span className="add-cat-check" aria-hidden="true">
+                        ✓
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+              {!showAllCats && moreCategories.length > 0 ? (
+                <button
+                  type="button"
+                  className="add-cat add-cat-more"
+                  onClick={() => setShowAllCats(true)}
+                  aria-label="More categories"
+                >
+                  <span className="add-cat-dot more" aria-hidden="true">
+                    ···
+                  </span>
+                  More
+                </button>
+              ) : null}
+            </div>
+            <div className="add-cats-tools">
+              <button
+                type="button"
+                className="add-cats-all"
+                onClick={() => {
+                  setEditingQuick(true);
+                  setShowAllCats(true);
+                }}
+              >
+                Customize
+              </button>
+              {moreCategories.length > 0 ? (
+                <button
+                  type="button"
+                  className="add-cats-all"
+                  onClick={() => setShowAllCats((open) => !open)}
+                >
+                  {showAllCats ? "Less" : "All categories"}
+                  <span aria-hidden="true">{showAllCats ? " ↑" : " ›"}</span>
+                </button>
+              ) : null}
+            </div>
+          </>
+        )}
+      </div>
+
+      <label className="add-note">
+        What it was
+        <input
+          value={description}
+          placeholder={
+            selectedCategory?.name
+              ? `optional · ${selectedCategory.name}`
+              : "optional"
+          }
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+
+      <button
+        className="btn primary add-submit"
+        type="submit"
+        disabled={saving || editingQuick}
+      >
+        {saving ? "Saving…" : "Add expense"}
+      </button>
     </form>
   );
 }
@@ -3600,12 +4084,7 @@ function MoneyInRow({
   async function confirmDeleteEntry() {
     setDeleting(true);
     try {
-      const entries = deleteSiteEntry(
-        userId,
-        month,
-        entry.id,
-        currentTotal,
-      );
+      const entries = deleteSiteEntry(userId, month, entry.id, currentTotal);
       onSaved(await saveSiteMoney(month, siteEntriesTotal(entries)));
       onError("");
       setConfirmDelete(false);
@@ -3899,7 +4378,10 @@ function ConfirmModal({
   }, [busy, onCancel]);
 
   return (
-    <div className="modal-back confirm-back" onClick={() => !busy && onCancel()}>
+    <div
+      className="modal-back confirm-back"
+      onClick={() => !busy && onCancel()}
+    >
       <div
         className="modal confirm-modal"
         role="dialog"
@@ -3941,6 +4423,7 @@ function ConfigPanel({
   remaining = 0,
   heroPrefs,
   savingsEntries = [],
+  fixedTemplates: fixedTemplatesProp = [],
   onSavingsChange,
   onHeroPref,
   onSaved,
@@ -3967,12 +4450,27 @@ function ConfigPanel({
   const [savingsSource, setSavingsSource] = useState("account");
   const [savingsSaving, setSavingsSaving] = useState(false);
   const [savingsHistoryOpen, setSavingsHistoryOpen] = useState(false);
+  const [fixedTemplates, setFixedTemplates] = useState(fixedTemplatesProp);
+  const [fixedOpen, setFixedOpen] = useState(false);
+  const [fixedAmount, setFixedAmount] = useState("");
+  const [fixedDescription, setFixedDescription] = useState("");
+  const [fixedCategory, setFixedCategory] = useState(
+    () =>
+      categories.find((item) => item.slug === "home")?.slug ||
+      categories.find((item) => item.slug === "other")?.slug ||
+      categories[0]?.slug ||
+      "other",
+  );
+  const [fixedDay, setFixedDay] = useState(1);
+  const [fixedSaving, setFixedSaving] = useState(false);
+  const [fixedBusyId, setFixedBusyId] = useState(null);
 
   const savingsTotal = savingsBalance(savingsEntries);
   const accountLeft = Math.max(0, Number(remaining) || 0);
-  const savingsHistory = [...savingsEntries].sort((a, b) =>
-    String(b.date).localeCompare(String(a.date)) ||
-    String(b.id).localeCompare(String(a.id)),
+  const savingsHistory = [...savingsEntries].sort(
+    (a, b) =>
+      String(b.date).localeCompare(String(a.date)) ||
+      String(b.id).localeCompare(String(a.id)),
   );
   const savingsHistoryLimit = 5;
   const savingsHistoryVisible = savingsHistoryOpen
@@ -3992,6 +4490,19 @@ function ConfigPanel({
       Object.fromEntries(categories.map((item) => [item.slug, item.name])),
     );
   }, [categories]);
+
+  useEffect(() => {
+    if (
+      !categories.some((item) => item.slug === fixedCategory) &&
+      categories[0]
+    ) {
+      setFixedCategory(categories[0].slug);
+    }
+  }, [categories, fixedCategory]);
+
+  useEffect(() => {
+    setFixedTemplates(fixedTemplatesProp || []);
+  }, [fixedTemplatesProp]);
 
   function onSavingsSubmit(event) {
     event.preventDefault();
@@ -4062,6 +4573,52 @@ function ConfigPanel({
     }
   }
 
+  function applyFixedPayload(payload) {
+    if (payload.templates) setFixedTemplates(payload.templates);
+    if (payload.ledger) onSaved(payload.ledger);
+    else if (payload.fixedTemplates) setFixedTemplates(payload.fixedTemplates);
+  }
+
+  async function onFixedSubmit(event) {
+    event.preventDefault();
+    const amount = Number(String(fixedAmount).replace(/\s/g, ""));
+    if (!Number.isInteger(amount) || amount <= 0) {
+      onError("Enter the fixed amount as a whole number.");
+      return;
+    }
+    setFixedSaving(true);
+    try {
+      applyFixedPayload(
+        await createFixedTemplate({
+          amount,
+          description: fixedDescription.trim(),
+          category: fixedCategory,
+          dayOfMonth: Number(fixedDay) || 1,
+        }),
+      );
+      setFixedAmount("");
+      setFixedDescription("");
+      setFixedOpen(false);
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setFixedSaving(false);
+    }
+  }
+
+  async function onFixedRemove(id) {
+    setFixedBusyId(id);
+    try {
+      applyFixedPayload(await deleteFixedTemplate(id));
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setFixedBusyId(null);
+    }
+  }
+
   async function onIncomeSubmit(event) {
     event.preventDefault();
     const amount = Number(String(incomeValue).replace(/\s/g, ""));
@@ -4088,11 +4645,14 @@ function ConfigPanel({
       <section className="config-block config-enter">
         <h2>Income</h2>
         <p className="hint">
-          Monthly income for {formatMonth(month)}. This is the base of your
-          Left card.
+          Monthly income for {formatMonth(month)}. This is the base of your Left
+          card.
         </p>
         {incomeOpen ? (
-          <form className="income-form income-form-inline" onSubmit={onIncomeSubmit}>
+          <form
+            className="income-form income-form-inline"
+            onSubmit={onIncomeSubmit}
+          >
             <label>
               Income amount
               <input
@@ -4102,7 +4662,11 @@ function ConfigPanel({
                 onChange={(event) => setIncomeValue(event.target.value)}
               />
             </label>
-            <button className="btn primary" type="submit" disabled={incomeSaving}>
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={incomeSaving}
+            >
               {incomeSaving ? "Saving…" : "Save"}
             </button>
             <button
@@ -4118,7 +4682,9 @@ function ConfigPanel({
           </form>
         ) : (
           <div className="config-income-row">
-            <strong className="figure config-income-amt">{lek(income || 0)}</strong>
+            <strong className="figure config-income-amt">
+              {lek(income || 0)}
+            </strong>
             <button
               type="button"
               className="icon-btn pen-btn"
@@ -4254,7 +4820,145 @@ function ConfigPanel({
         )}
       </section>
 
-      <section className="config-block config-enter" style={{ animationDelay: "80ms" }}>
+      <section
+        className="config-block config-enter"
+        style={{ animationDelay: "60ms" }}
+      >
+        <h2>Fixed transactions</h2>
+        <p className="hint">
+          Recurring bills like rent. Net adds them every month on the day you
+          pick, marked as fixed.
+        </p>
+        {fixedOpen ? (
+          <form className="savings-form fixed-form" onSubmit={onFixedSubmit}>
+            <label>
+              Amount
+              <input
+                value={fixedAmount}
+                inputMode="numeric"
+                placeholder="25000"
+                autoFocus
+                onChange={(event) => setFixedAmount(event.target.value)}
+              />
+            </label>
+            <label>
+              Day each month
+              <select
+                value={fixedDay}
+                onChange={(event) => setFixedDay(Number(event.target.value))}
+              >
+                {Array.from({ length: 31 }, (_, index) => index + 1).map(
+                  (day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ),
+                )}
+              </select>
+            </label>
+            <label>
+              Category
+              <select
+                value={fixedCategory}
+                onChange={(event) => setFixedCategory(event.target.value)}
+              >
+                {categories.map((item) => (
+                  <option key={item.slug} value={item.slug}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grow">
+              Note
+              <input
+                value={fixedDescription}
+                placeholder="optional · rent, wifi…"
+                onChange={(event) => setFixedDescription(event.target.value)}
+              />
+            </label>
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={fixedSaving}
+            >
+              {fixedSaving ? "Saving…" : "Add fixed"}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setFixedOpen(false);
+                setFixedAmount("");
+                setFixedDescription("");
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <div className="config-income-row">
+            <strong className="figure config-income-amt">
+              {fixedTemplates.length
+                ? lek(
+                    fixedTemplates.reduce(
+                      (sum, item) => sum + (Number(item.amount) || 0),
+                      0,
+                    ),
+                  )
+                : "0 L"}
+            </strong>
+            <button
+              type="button"
+              className="icon-btn pen-btn"
+              aria-label="Add fixed transaction"
+              onClick={() => setFixedOpen(true)}
+            >
+              <PenIcon />
+            </button>
+          </div>
+        )}
+        {fixedTemplates.length === 0 ? (
+          <p className="hint savings-empty">No fixed transactions yet.</p>
+        ) : (
+          <ul className="savings-list fixed-list">
+            {fixedTemplates.map((item) => {
+              const cat = categories.find((row) => row.slug === item.category);
+              return (
+                <li key={item.id} className="savings-list-item fixed-list-item">
+                  <span
+                    className="swatch"
+                    style={{ background: cat?.color || "var(--muted)" }}
+                    aria-hidden="true"
+                  />
+                  <span className="fixed-list-copy">
+                    <strong>{item.description}</strong>
+                    <small>
+                      Day {item.dayOfMonth} · {cat?.name || item.category}
+                    </small>
+                  </span>
+                  <span className="savings-list-amt in">
+                    {lek(item.amount)}
+                  </span>
+                  <button
+                    type="button"
+                    className="texty"
+                    disabled={fixedBusyId === item.id}
+                    onClick={() => onFixedRemove(item.id)}
+                  >
+                    {fixedBusyId === item.id ? "…" : "Remove"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section
+        className="config-block config-enter"
+        style={{ animationDelay: "80ms" }}
+      >
         <h2>Home card</h2>
         <p className="hint">
           Choose what stays on the Left card. The big remaining amount always
@@ -4292,8 +4996,8 @@ function ConfigPanel({
       >
         <h2>Categories</h2>
         <p className="hint">
-          Rename a category, or add one. Fixed payments are marked on the line
-          itself, and they stay out of the average per day.
+          Rename a category, or add one. Monthly fixed bills live in Fixed
+          transactions above; one-off fixed lines can still be marked on add.
         </p>
         <div className="config-cat-grid">
           {categories.map((item, index) => {
@@ -4301,7 +5005,9 @@ function ConfigPanel({
             const editing = editingSlug === item.slug;
             return (
               <div
-                className={editing ? "config-cat-card editing" : "config-cat-card"}
+                className={
+                  editing ? "config-cat-card editing" : "config-cat-card"
+                }
                 key={item.slug}
                 style={{ animationDelay: `${240 + index * 40}ms` }}
               >

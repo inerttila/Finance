@@ -139,6 +139,28 @@ export function openNextMonth(force = false) {
   });
 }
 
+export function listFixedTemplates() {
+  return request("/api/fixed-templates");
+}
+
+export function createFixedTemplate(payload) {
+  return request("/api/fixed-templates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateFixedTemplate(id, payload) {
+  return request(`/api/fixed-templates/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteFixedTemplate(id) {
+  return request(`/api/fixed-templates/${id}`, { method: "DELETE" });
+}
+
 export function scanInvoice(url) {
   return request("/api/invoice-scan", {
     method: "POST",
