@@ -1520,6 +1520,7 @@ export default function App() {
 
       {scanOpen && data && (
         <ScanInvoiceModal
+          userId={userId}
           categories={data.categories}
           monthKey={data.closed ? data.month : data.openMonth}
           onClose={() => setScanOpen(false)}
@@ -3153,6 +3154,26 @@ function MonthList({ data, onOpen }) {
   );
 }
 
+const SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function formatAddDate(iso) {
+  const [year, month, day] = iso.split("-").map(Number);
+  return `${SHORT_MONTHS[month - 1]} ${day}, ${year}`;
+}
+
 function clampDateToMonth(iso, monthKey) {
   const bounds = monthDayBounds(monthKey);
   if (!iso) return defaultDateInMonth(monthKey);
@@ -3161,7 +3182,14 @@ function clampDateToMonth(iso, monthKey) {
   return iso;
 }
 
-function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
+function ScanInvoiceModal({
+  userId,
+  categories,
+  monthKey,
+  onClose,
+  onSaved,
+  onError,
+}) {
   const [phase, setPhase] = useState("scan");
   const [paste, setPaste] = useState("");
   const [loading, setLoading] = useState(false);
@@ -3169,6 +3197,12 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
   const [camError, setCamError] = useState("");
   const [camKey, setCamKey] = useState(0);
   const [draft, setDraft] = useState(null);
+  const [fixed, setFixed] = useState(false);
+  const [showAllCats, setShowAllCats] = useState(false);
+  const [quickSlugs] = useState(() =>
+    readQuickCategorySlugs(userId, categories),
+  );
+  const dateRef = useRef(null);
   const scannerRef = useRef(null);
   const handledRef = useRef(false);
 
@@ -3274,19 +3308,25 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
   async function onSubmit(event) {
     event.preventDefault();
     const parsed = parseMoney(draft.amount);
-    if (!parsed || !draft.description.trim()) {
-      onError("Enter an amount and what it was for.");
+    if (!parsed) {
+      onError("Enter an amount.");
       return;
     }
+    const selected = categories.find((item) => item.slug === draft.category);
+    const note =
+      draft.description.trim() ||
+      selected?.name ||
+      draft.category ||
+      "Other";
     setSaving(true);
     try {
       onSaved(
         await createTransaction({
           amount: parsed,
-          description: draft.description.trim(),
+          description: note,
           category: draft.category,
           spentOn: draft.spentOn,
-          fixed: false,
+          fixed,
         }),
       );
       onError("");
@@ -3297,7 +3337,48 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
     }
   }
 
+  function openDatePicker() {
+    const input = dateRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === "function") {
+      try {
+        input.showPicker();
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    input.focus();
+    input.click();
+  }
+
   const bounds = monthDayBounds(monthKey);
+  const bySlug = useMemo(
+    () => new Map(categories.map((item) => [item.slug, item])),
+    [categories],
+  );
+  const quickCategories = useMemo(
+    () => quickSlugs.map((slug) => bySlug.get(slug)).filter(Boolean),
+    [bySlug, quickSlugs],
+  );
+  const moreCategories = useMemo(() => {
+    const quick = new Set(quickSlugs);
+    return categories.filter((item) => !quick.has(item.slug));
+  }, [categories, quickSlugs]);
+  const visibleCategories = showAllCats
+    ? [...quickCategories, ...moreCategories]
+    : quickCategories;
+  const selectedCategory = draft
+    ? bySlug.get(draft.category)
+    : null;
+
+  useEffect(() => {
+    if (!draft || showAllCats) return;
+    if (quickSlugs.includes(draft.category)) return;
+    if (moreCategories.some((item) => item.slug === draft.category)) {
+      setShowAllCats(true);
+    }
+  }, [draft, moreCategories, quickSlugs, showAllCats]);
 
   return (
     <div
@@ -3311,113 +3392,213 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
         aria-labelledby="scan-invoice-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="add-sheet-head">
-          <h2 id="scan-invoice-title">
-            {phase === "review" ? "Confirm expense" : "Scan fiscal QR"}
-          </h2>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Close"
-            disabled={loading || saving}
-            onClick={onClose}
-          >
-            ×
-          </button>
-        </div>
-
         {phase === "scan" && (
-          <div className="scan-body">
-            <p className="hint scan-hint-mobile">
-              Point the camera at the QR on a Tatime fiscal invoice.
-            </p>
-            <p className="hint scan-hint-desktop">
-              Point the camera at the QR on a Tatime fiscal invoice, or paste
-              the verify link.
-            </p>
-            <div id="fiscal-qr-reader" className="scan-camera" key={camKey} />
-            {loading && <p className="hint">Reading invoice…</p>}
-            {camError && (
-              <p className="banner" role="alert">
-                {camError}
-              </p>
-            )}
-            <label className="scan-paste">
-              Invoice link
-              <textarea
-                rows={3}
-                value={paste}
-                placeholder="https://efiskalizimi-app.tatime.gov.al/invoice-check/#/verify?iic=…"
-                onChange={(event) => setPaste(event.target.value)}
-              />
-            </label>
-            <div className="editor-actions">
+          <>
+            <div className="add-sheet-head">
+              <div className="add-sheet-titles">
+                <h2 id="scan-invoice-title">Scan fiscal QR</h2>
+              </div>
               <button
-                className="btn primary scan-paste-action"
                 type="button"
-                disabled={loading || !paste.trim()}
-                onClick={() => lookup(paste)}
+                className="icon-btn"
+                aria-label="Close"
+                disabled={loading || saving}
+                onClick={onClose}
               >
-                {loading ? "Reading…" : "Read link"}
-              </button>
-              <button className="btn" type="button" onClick={onClose}>
-                Cancel
+                ×
               </button>
             </div>
-          </div>
+            <div className="scan-body">
+              <p className="hint scan-hint-mobile">
+                Point the camera at the QR on a Tatime fiscal invoice.
+              </p>
+              <p className="hint scan-hint-desktop">
+                Point the camera at the QR on a Tatime fiscal invoice, or paste
+                the verify link.
+              </p>
+              <div id="fiscal-qr-reader" className="scan-camera" key={camKey} />
+              {loading && <p className="hint">Reading invoice…</p>}
+              {camError && (
+                <p className="banner" role="alert">
+                  {camError}
+                </p>
+              )}
+              <label className="scan-paste">
+                Invoice link
+                <textarea
+                  rows={3}
+                  value={paste}
+                  placeholder="https://efiskalizimi-app.tatime.gov.al/invoice-check/#/verify?iic=…"
+                  onChange={(event) => setPaste(event.target.value)}
+                />
+              </label>
+              <div className="editor-actions">
+                <button
+                  className="btn primary scan-paste-action"
+                  type="button"
+                  disabled={loading || !paste.trim()}
+                  onClick={() => lookup(paste)}
+                >
+                  {loading ? "Reading…" : "Read link"}
+                </button>
+                <button className="btn" type="button" onClick={onClose}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
         {phase === "review" && draft && (
           <form className="editor add-form" onSubmit={onSubmit}>
-            {draft.seller && (
-              <p className="hint month-form-note">From {draft.seller}</p>
-            )}
-            <label>
+            <div className="add-sheet-head">
+              <div className="add-sheet-titles">
+                <h2 id="scan-invoice-title">Confirm expense</h2>
+                {draft.seller ? (
+                  <p className="hint add-scan-seller">From {draft.seller}</p>
+                ) : null}
+              </div>
+              <div className="add-head-meta">
+                <button
+                  type="button"
+                  className="add-date-btn"
+                  onClick={openDatePicker}
+                  aria-label={`Date ${formatAddDate(draft.spentOn)}. Change date`}
+                >
+                  <span className="add-date-ico" aria-hidden="true">
+                    ▤
+                  </span>
+                  <span>{formatAddDate(draft.spentOn)}</span>
+                  <span className="add-date-edit" aria-hidden="true">
+                    ✎
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={fixed ? "add-fixed-pill on" : "add-fixed-pill"}
+                  aria-pressed={fixed}
+                  onClick={() => setFixed((value) => !value)}
+                >
+                  Fixed
+                </button>
+              </div>
+              <input
+                ref={dateRef}
+                className="add-date-input"
+                type="date"
+                min={bounds.min}
+                max={bounds.max}
+                value={draft.spentOn}
+                tabIndex={-1}
+                aria-hidden="true"
+                onChange={(event) =>
+                  setDraft({ ...draft, spentOn: event.target.value })
+                }
+              />
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Close"
+                disabled={saving}
+                onClick={onClose}
+              >
+                ×
+              </button>
+            </div>
+
+            <label className="add-amount">
               Amount
               <input
                 value={draft.amount}
                 inputMode="numeric"
+                autoFocus
                 onChange={(event) =>
                   setDraft({ ...draft, amount: event.target.value })
                 }
               />
             </label>
-            <label className="grow">
+
+            <div className="add-cats-block">
+              <div className="add-cats-head">
+                <span>Category</span>
+              </div>
+              <div className="add-cats" role="group" aria-label="Category">
+                {visibleCategories.map((item) => {
+                  const on = draft.category === item.slug;
+                  return (
+                    <button
+                      key={item.slug}
+                      type="button"
+                      className={on ? "add-cat on" : "add-cat"}
+                      aria-pressed={on}
+                      onClick={() =>
+                        setDraft({ ...draft, category: item.slug })
+                      }
+                    >
+                      <span
+                        className="add-cat-dot"
+                        style={{
+                          background: `${item.color}22`,
+                          color: item.color,
+                        }}
+                        aria-hidden="true"
+                      >
+                        <span style={{ background: item.color }} />
+                      </span>
+                      {item.name}
+                      {on ? (
+                        <span className="add-cat-check" aria-hidden="true">
+                          ✓
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+                {!showAllCats && moreCategories.length > 0 ? (
+                  <button
+                    type="button"
+                    className="add-cat add-cat-more"
+                    onClick={() => setShowAllCats(true)}
+                    aria-label="More categories"
+                  >
+                    <span className="add-cat-dot more" aria-hidden="true">
+                      ···
+                    </span>
+                    More
+                  </button>
+                ) : null}
+              </div>
+              <div className="add-cats-tools">
+                {moreCategories.length > 0 ? (
+                  <button
+                    type="button"
+                    className="add-cats-all"
+                    onClick={() => setShowAllCats((open) => !open)}
+                  >
+                    {showAllCats ? "Less" : "All categories"}
+                    <span aria-hidden="true">
+                      {showAllCats ? " ↑" : " ›"}
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <label className="add-note">
               What it was
               <input
                 value={draft.description}
+                placeholder={
+                  selectedCategory?.name
+                    ? `optional · ${selectedCategory.name}`
+                    : "optional"
+                }
                 onChange={(event) =>
                   setDraft({ ...draft, description: event.target.value })
                 }
               />
             </label>
-            <label>
-              Category
-              <select
-                value={draft.category}
-                onChange={(event) =>
-                  setDraft({ ...draft, category: event.target.value })
-                }
-              >
-                {categories.map((item) => (
-                  <option key={item.slug} value={item.slug}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                min={bounds.min}
-                max={bounds.max}
-                value={draft.spentOn}
-                onChange={(event) =>
-                  setDraft({ ...draft, spentOn: event.target.value })
-                }
-              />
-            </label>
+
             {draft.items?.length > 1 && (
               <ul className="scan-items">
                 {draft.items.map((item, index) => (
@@ -3428,48 +3609,33 @@ function ScanInvoiceModal({ categories, monthKey, onClose, onSaved, onError }) {
                 ))}
               </ul>
             )}
-            <div className="editor-actions">
-              <button className="btn primary" type="submit" disabled={saving}>
-                {saving ? "Saving…" : "Add to ledger"}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                disabled={saving}
-                onClick={() => {
-                  setDraft(null);
-                  setCamKey((value) => value + 1);
-                  setPhase("scan");
-                }}
-              >
-                Scan again
-              </button>
-            </div>
+
+            <button
+              className="btn primary add-submit"
+              type="submit"
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Add expense"}
+            </button>
+            <button
+              className="btn add-scan-again"
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setDraft(null);
+                setFixed(false);
+                setShowAllCats(false);
+                setCamKey((value) => value + 1);
+                setPhase("scan");
+              }}
+            >
+              Scan again
+            </button>
           </form>
         )}
       </div>
     </div>
   );
-}
-
-const SHORT_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-function formatAddDate(iso) {
-  const [year, month, day] = iso.split("-").map(Number);
-  return `${SHORT_MONTHS[month - 1]} ${day}, ${year}`;
 }
 
 function AddExpenseModal({
