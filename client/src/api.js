@@ -93,17 +93,24 @@ export function createTransaction(payload) {
   });
 }
 
-export function searchTransactions({ q = "", category = "", month = "" } = {}) {
+export function searchTransactions({
+  q = "",
+  category = "",
+  month = "",
+  day = "",
+} = {}) {
   const query = String(q || "").trim();
   const slug = String(category || "").trim();
   const monthKey = String(month || "").trim();
-  if (!query && !slug && !monthKey) {
+  const dayFilter = String(day || "").trim();
+  if (!query && !slug && !monthKey && !dayFilter) {
     return Promise.resolve({ transactions: [] });
   }
   const params = new URLSearchParams();
   if (query) params.set("q", query);
   if (slug) params.set("category", slug);
   if (monthKey) params.set("month", monthKey);
+  if (dayFilter) params.set("day", dayFilter);
   return request(`/api/transactions/search?${params.toString()}`);
 }
 
@@ -130,6 +137,16 @@ export function renameCategory(slug, name, month) {
     method: "PATCH",
     body: JSON.stringify({ name, month }),
   });
+}
+
+export function deleteCategory(slug, month) {
+  const params = new URLSearchParams();
+  if (month) params.set("month", month);
+  const query = params.toString();
+  return request(
+    `/api/categories/${encodeURIComponent(slug)}${query ? `?${query}` : ""}`,
+    { method: "DELETE" },
+  );
 }
 
 export function openNextMonth(force = false) {

@@ -147,6 +147,24 @@ async function listFixedTemplates(userId) {
   return rows.map(mapFixedTemplate);
 }
 
+async function createFixedTemplateRow(
+  userId,
+  { amount, description, category, dayOfMonth },
+) {
+  const { rows: orderRows } = await pool.query(
+    "select coalesce(max(sort_order), 0) + 1 as next from fixed_templates where user_id = $1",
+    [userId],
+  );
+  const created = await pool.query(
+    `insert into fixed_templates
+      (user_id, amount, description, category_slug, day_of_month, active, sort_order)
+     values ($1, $2, $3, $4, $5, true, $6)
+     returning id`,
+    [userId, amount, description, category, dayOfMonth, orderRows[0].next],
+  );
+  return created.rows[0].id;
+}
+
 async function ensureFixedForMonth(userId, monthKey) {
   const bounds = monthBounds(monthKey);
   if (!bounds) return 0;
@@ -435,38 +453,64 @@ async function loadMonth(userId, month) {
     throw error;
   }
 
-  const [incomeResult, txResult, categoryResult] = await Promise.all([
-    pool.query(
-      "select amount, site_amount from income where user_id = $1 and month = $2",
-      [userId, bounds.start],
-    ),
-    pool.query(
-      `select id, amount, description, category_slug, people,
-              to_char(spent_on, 'YYYY-MM-DD') as spent_on,
-              weekend, fixed, fixed_template_id
-       from transactions
-       where user_id = $1 and spent_on >= $2 and spent_on < $3
-       order by spent_on desc, sort_order desc, id desc`,
-      [userId, bounds.start, bounds.next],
-    ),
-    pool.query(
-      "select slug, name, color from categories where user_id = $1 order by sort_order, slug",
-      [userId],
-    ),
-  ]);
+  const [incomeResult, txResult, categoryResult, usageResult, fixedUsageResult] =
+    await Promise.all([
+      pool.query(
+        "select amount, site_amount from income where user_id = $1 and month = $2",
+        [userId, bounds.start],
+      ),
+      pool.query(
+        `select id, amount, description, category_slug, people,
+                to_char(spent_on, 'YYYY-MM-DD') as spent_on,
+                weekend, fixed, fixed_template_id
+         from transactions
+         where user_id = $1 and spent_on >= $2 and spent_on < $3
+         order by spent_on desc, sort_order desc, id desc`,
+        [userId, bounds.start, bounds.next],
+      ),
+      pool.query(
+        "select slug, name, color from categories where user_id = $1 order by sort_order, slug",
+        [userId],
+      ),
+      pool.query(
+        `select category_slug, count(*)::int as n
+         from transactions
+         where user_id = $1
+         group by category_slug`,
+        [userId],
+      ),
+      pool.query(
+        `select category_slug, count(*)::int as n
+         from fixed_templates
+         where user_id = $1
+         group by category_slug`,
+        [userId],
+      ),
+    ]);
 
   const transactions = txResult.rows.map(mapTx);
   const income = incomeResult.rows[0]?.amount ?? 0;
   const site = incomeResult.rows[0]?.site_amount ?? 0;
   const spent = transactions.reduce((sum, tx) => sum + tx.amount, 0);
+  const usageBySlug = new Map(
+    usageResult.rows.map((row) => [row.category_slug, row.n]),
+  );
+  const fixedUsageBySlug = new Map(
+    fixedUsageResult.rows.map((row) => [row.category_slug, row.n]),
+  );
   const byCategory = categoryResult.rows.map((category) => {
     const rows = transactions.filter((tx) => tx.category === category.slug);
+    const recordCount =
+      (usageBySlug.get(category.slug) || 0) +
+      (fixedUsageBySlug.get(category.slug) || 0);
     return {
       slug: category.slug,
       name: category.name,
       color: category.color,
       total: rows.reduce((sum, tx) => sum + tx.amount, 0),
       count: rows.length,
+      recordCount,
+      hasRecords: recordCount > 0,
     };
   });
 
@@ -720,6 +764,51 @@ app.patch("/api/categories/:slug", async (req, res, next) => {
       [name, user.id, slug],
     );
     res.json(await loadMonth(user.id, req.body?.month));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/categories/:slug", async (req, res, next) => {
+  try {
+    const user = await resolveUserId(req);
+    const slug = String(req.params.slug);
+    if (!await categoryExists(user.id, slug)) {
+      return res.status(404).json({ error: "That category is gone." });
+    }
+    if (slug === "other") {
+      return res.status(400).json({ error: "Other stays — it’s the catch-all category." });
+    }
+    const count = await pool.query(
+      "select count(*)::int as n from categories where user_id = $1",
+      [user.id],
+    );
+    if ((count.rows[0]?.n || 0) <= 1) {
+      return res.status(400).json({ error: "Keep at least one category." });
+    }
+    const [txUsage, fixedUsage] = await Promise.all([
+      pool.query(
+        "select count(*)::int as n from transactions where user_id = $1 and category_slug = $2",
+        [user.id, slug],
+      ),
+      pool.query(
+        "select count(*)::int as n from fixed_templates where user_id = $1 and category_slug = $2",
+        [user.id, slug],
+      ),
+    ]);
+    const records =
+      (txUsage.rows[0]?.n || 0) + (fixedUsage.rows[0]?.n || 0);
+    if (records > 0) {
+      return res.status(400).json({
+        error:
+          "That category still has records. Move or delete them first.",
+      });
+    }
+    await pool.query(
+      "delete from categories where user_id = $1 and slug = $2",
+      [user.id, slug],
+    );
+    res.json(await loadMonth(user.id, req.body?.month || req.query?.month));
   } catch (error) {
     next(error);
   }
@@ -990,11 +1079,15 @@ app.get("/api/transactions/search", async (req, res, next) => {
     const q = String(req.query?.q || "").trim();
     const category = String(req.query?.category || "").trim();
     const month = String(req.query?.month || "").trim();
+    const day = String(req.query?.day || "").trim().toLowerCase();
     const bounds = month ? monthBounds(month) : null;
     if (month && !bounds) {
       return res.status(400).json({ error: "That month is not valid." });
     }
-    if (!q && !category && !month) {
+    if (day && day !== "weekday" && day !== "weekend") {
+      return res.status(400).json({ error: "Day filter must be weekday or weekend." });
+    }
+    if (!q && !category && !month && !day) {
       return res.json({ transactions: [] });
     }
     if (q.length > 80) {
@@ -1005,6 +1098,8 @@ app.get("/api/transactions/search", async (req, res, next) => {
     }
     const pattern = q ? `%${q.replace(/[%_\\]/g, "\\$&")}%` : "";
     const digits = q.replace(/\D/g, "");
+    const weekendFilter =
+      day === "weekend" ? true : day === "weekday" ? false : null;
     const { rows } = await pool.query(
       `select id, amount, description, category_slug, people,
               to_char(spent_on, 'YYYY-MM-DD') as spent_on,
@@ -1013,6 +1108,7 @@ app.get("/api/transactions/search", async (req, res, next) => {
        where user_id = $1
          and ($4 = '' or category_slug = $4)
          and ($5::date is null or (spent_on >= $5::date and spent_on < $6::date))
+         and ($7::boolean is null or weekend = $7::boolean)
          and (
            $2 = ''
            or description ilike $2 escape '\\'
@@ -1032,6 +1128,7 @@ app.get("/api/transactions/search", async (req, res, next) => {
         category,
         bounds?.start || null,
         bounds?.next || null,
+        weekendFilter,
       ],
     );
     res.json({ transactions: rows.map(mapTx) });
@@ -1069,18 +1166,12 @@ app.post("/api/transactions", async (req, res, next) => {
         31,
         Math.max(1, Number(spentOn.slice(-2)) || 1),
       );
-      const { rows: orderRows } = await pool.query(
-        "select coalesce(max(sort_order), 0) + 1 as next from fixed_templates where user_id = $1",
-        [user.id],
-      );
-      const created = await pool.query(
-        `insert into fixed_templates
-          (user_id, amount, description, category_slug, day_of_month, active, sort_order)
-         values ($1, $2, $3, $4, $5, true, $6)
-         returning id`,
-        [user.id, amount, description, category, dayOfMonth, orderRows[0].next],
-      );
-      fixedTemplateId = created.rows[0].id;
+      fixedTemplateId = await createFixedTemplateRow(user.id, {
+        amount,
+        description,
+        category,
+        dayOfMonth,
+      });
     }
     await pool.query(
       `insert into transactions
@@ -1110,10 +1201,14 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
     const user = await resolveUserId(req);
     const id = Number(req.params.id);
     const current = await pool.query(
-      "select to_char(spent_on, 'YYYY-MM-DD') as spent_on from transactions where id = $1 and user_id = $2",
+      `select amount, description, category_slug,
+              to_char(spent_on, 'YYYY-MM-DD') as spent_on,
+              fixed, fixed_template_id
+       from transactions where id = $1 and user_id = $2`,
       [id, user.id],
     );
     if (!current.rows[0]) return res.status(404).json({ error: "That line is gone." });
+    const row = current.rows[0];
 
     const fields = [];
     const values = [];
@@ -1139,14 +1234,38 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
       if (!await categoryExists(user.id, category)) return res.status(400).json({ error: "That category does not exist." });
       set("category_slug", category);
     }
-    if (req.body?.fixed != null) {
-      set("fixed", Boolean(req.body.fixed));
-    }
     if (req.body?.spentOn != null) {
       const spentOn = String(req.body.spentOn);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) return res.status(400).json({ error: "That date is not valid." });
       set("spent_on", spentOn);
       set("weekend", isWeekendIso(spentOn));
+    }
+    if (req.body?.fixed != null) {
+      const nextFixed = Boolean(req.body.fixed);
+      set("fixed", nextFixed);
+      if (nextFixed && !row.fixed_template_id) {
+        const spentOn = String(req.body?.spentOn || row.spent_on);
+        const amount = req.body?.amount != null
+          ? parseAmountInput(req.body.amount)
+          : row.amount;
+        const description = req.body?.description != null
+          ? String(req.body.description).trim().replace(/\s+/g, " ")
+          : row.description;
+        const category = req.body?.category != null
+          ? String(req.body.category)
+          : row.category_slug;
+        const dayOfMonth = Math.min(
+          31,
+          Math.max(1, Number(spentOn.slice(-2)) || 1),
+        );
+        const templateId = await createFixedTemplateRow(user.id, {
+          amount,
+          description,
+          category,
+          dayOfMonth,
+        });
+        set("fixed_template_id", templateId);
+      }
     }
 
     if (fields.length) {
@@ -1158,7 +1277,7 @@ app.patch("/api/transactions/:id", async (req, res, next) => {
       );
     }
 
-    const monthSource = req.body?.spentOn || current.rows[0].spent_on;
+    const monthSource = req.body?.spentOn || row.spent_on;
     res.json(await loadMonth(user.id, String(monthSource).slice(0, 7)));
   } catch (error) {
     next(error);

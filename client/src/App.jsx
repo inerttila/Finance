@@ -5,6 +5,7 @@ import {
   createFixedTemplate,
   createTransaction,
   createUser,
+  deleteCategory,
   deleteCurrentUser,
   deleteFixedTemplate,
   deleteTransaction,
@@ -1670,6 +1671,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
   const [needle, setNeedle] = useState("");
   const [category, setCategory] = useState("");
   const [monthFilter, setMonthFilter] = useState("");
+  const [dayFilter, setDayFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
 
@@ -1697,7 +1699,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
 
   useEffect(() => {
     let cancelled = false;
-    const active = Boolean(needle || category || monthFilter);
+    const active = Boolean(needle || category || monthFilter || dayFilter);
     if (!active) {
       setResults([]);
       setLoading(false);
@@ -1709,6 +1711,12 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
       return String(date || "").startsWith(monthFilter);
     }
 
+    function inDay(date) {
+      if (!dayFilter) return true;
+      const weekend = isWeekend(date);
+      return dayFilter === "weekend" ? weekend : !weekend;
+    }
+
     function collectLocal(txs = []) {
       const local = [];
       if (needle) {
@@ -1716,7 +1724,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
         const savingsMatch = !category || category === SAVINGS_CATEGORY.slug;
         if (savingsMatch) {
           for (const entry of readSavingsEntries(userId)) {
-            if (!inMonth(entry.date)) continue;
+            if (!inMonth(entry.date) || !inDay(entry.date)) continue;
             const title =
               entry.direction === "out" ? "From savings" : "To savings";
             if (matchesSearchNeedle(title, lower, entry.amount)) {
@@ -1735,6 +1743,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
           for (const monthItem of monthList || []) {
             if (monthFilter && monthItem.month !== monthFilter) continue;
             for (const entry of readSiteEntries(userId, monthItem.month, 0)) {
+              if (!inDay(entry.date)) continue;
               if (
                 matchesSearchNeedle(
                   `${entry.title} money in`,
@@ -1756,11 +1765,11 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
         }
       } else if (
         category === SAVINGS_CATEGORY.slug ||
-        (!category && monthFilter)
+        (!category && (monthFilter || dayFilter))
       ) {
         if (!category || category === SAVINGS_CATEGORY.slug) {
           for (const entry of readSavingsEntries(userId)) {
-            if (!inMonth(entry.date)) continue;
+            if (!inMonth(entry.date) || !inDay(entry.date)) continue;
             if (category && category !== SAVINGS_CATEGORY.slug) continue;
             local.push({
               kind: entry.direction === "out" ? "savings-out" : "savings-in",
@@ -1777,6 +1786,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
           for (const monthItem of monthList || []) {
             if (monthFilter && monthItem.month !== monthFilter) continue;
             for (const entry of readSiteEntries(userId, monthItem.month, 0)) {
+              if (!inDay(entry.date)) continue;
               local.push({
                 kind: "money-in",
                 id: `money-in:${monthItem.month}:${entry.id}`,
@@ -1810,6 +1820,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
       q: needle,
       category: apiCategory,
       month: monthFilter,
+      day: dayFilter,
     })
       .then((payload) => {
         if (cancelled) return;
@@ -1831,7 +1842,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
     return () => {
       cancelled = true;
     };
-  }, [needle, category, monthFilter, userId, monthList, onError]);
+  }, [needle, category, monthFilter, dayFilter, userId, monthList, onError]);
 
   const groups = useMemo(() => {
     const next = [];
@@ -1867,10 +1878,16 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
     return list;
   }, [categories, userId]);
 
-  const active = Boolean(needle || category || monthFilter);
+  const active = Boolean(needle || category || monthFilter || dayFilter);
   const selectedName =
     categoryChips.find((item) => item.slug === category)?.name || "";
   const selectedMonthLabel = monthFilter ? formatMonth(monthFilter) : "";
+  const selectedDayLabel =
+    dayFilter === "weekend"
+      ? "Weekends"
+      : dayFilter === "weekday"
+        ? "Weekdays"
+        : "";
 
   return (
     <section className="search-panel">
@@ -1884,6 +1901,29 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
           onChange={(event) => setDraft(event.target.value)}
         />
       </label>
+      <div className="search-cats" role="group" aria-label="Day type">
+        {[
+          { id: "weekday", label: "Weekdays" },
+          { id: "weekend", label: "Weekends" },
+        ].map((item) => {
+          const on = dayFilter === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={on ? "search-cat on" : "search-cat"}
+              aria-pressed={on}
+              onClick={() =>
+                setDayFilter((current) =>
+                  current === item.id ? "" : item.id,
+                )
+              }
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
       {monthChips.length > 0 && (
         <div className="search-cats" role="group" aria-label="Months">
           {monthChips.map((key) => {
@@ -1932,11 +1972,9 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
         <p className="empty">
           {needle
             ? `No spending matched “${needle}”.`
-            : selectedName
-              ? `No spending in ${selectedName}${selectedMonthLabel ? ` · ${selectedMonthLabel}` : ""} yet.`
-              : selectedMonthLabel
-                ? `No spending in ${selectedMonthLabel} yet.`
-                : "No spending matched."}
+            : selectedName || selectedMonthLabel || selectedDayLabel
+              ? `No spending${selectedName ? ` in ${selectedName}` : ""}${selectedMonthLabel ? ` · ${selectedMonthLabel}` : ""}${selectedDayLabel ? ` · ${selectedDayLabel}` : ""} yet.`
+              : "No spending matched."}
         </p>
       )}
       {active && !loading && groups.length > 0 && (
@@ -1946,6 +1984,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
             {selectedMonthLabel
               ? ` · ${selectedMonthLabel}`
               : " across all months"}
+            {selectedDayLabel ? ` · ${selectedDayLabel}` : ""}
             {selectedName ? ` · ${selectedName}` : ""}
           </p>
           {groups.map((day) => (
@@ -2420,6 +2459,16 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
     setLocalError("");
   }
 
+  function removeCategoryDraft(slug) {
+    if (categories.length <= 1) {
+      setLocalError("Keep at least one category.");
+      return;
+    }
+    setCategories((list) => list.filter((item) => item.slug !== slug));
+    if (editingSlug === slug) setEditingSlug("");
+    setLocalError("");
+  }
+
   async function onStart(event) {
     event.preventDefault();
     const cleanName = name.trim().replace(/\s+/g, " ");
@@ -2446,7 +2495,7 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
   const hints = [
     "This is how you’ll show up on your ledger.",
     "How much income do you start this month with?",
-    "These start as the defaults. Rename any, or add your own.",
+    "These start as the defaults. Rename, remove, or add your own.",
   ];
 
   return (
@@ -2568,14 +2617,25 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
                           Save
                         </button>
                       ) : (
-                        <button
-                          type="button"
-                          className="icon-btn pen-btn"
-                          aria-label={`Edit ${item.name}`}
-                          onClick={() => setEditingSlug(item.slug)}
-                        >
-                          <PenIcon />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="icon-btn pen-btn"
+                            aria-label={`Edit ${item.name}`}
+                            onClick={() => setEditingSlug(item.slug)}
+                          >
+                            <PenIcon />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn cat-remove-btn"
+                            aria-label={`Remove ${item.name}`}
+                            disabled={categories.length <= 1}
+                            onClick={() => removeCategoryDraft(item.slug)}
+                          >
+                            ×
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -2962,7 +3022,7 @@ function SiteMoneyForm({
       </label>
       <div className="site-money-actions">
         <button className="btn primary" type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Add"}
+          Add
         </button>
         <button className="btn" type="button" onClick={onCancel}>
           Cancel
@@ -3247,16 +3307,7 @@ function ScanInvoiceModal({
             await lookup(decoded);
           },
         );
-        if (!cancelled) {
-          setCamError("");
-          try {
-            await scanner.applyVideoConstraints({
-              advanced: [{ zoom: 2 }],
-            });
-          } catch {
-            /* hardware zoom unsupported — CSS crop still zooms the view */
-          }
-        }
+        if (!cancelled) setCamError("");
       } catch (err) {
         if (!cancelled) {
           setCamError(
@@ -3615,7 +3666,7 @@ function ScanInvoiceModal({
               type="submit"
               disabled={saving}
             >
-              {saving ? "Saving…" : "Add expense"}
+              Add expense
             </button>
             <button
               className="btn add-scan-again"
@@ -4150,7 +4201,7 @@ function AddForm({
         type="submit"
         disabled={saving || editingQuick}
       >
-        {saving ? "Saving…" : "Add expense"}
+        Add expense
       </button>
     </form>
   );
@@ -4317,7 +4368,7 @@ function MoneyInRow({
           </label>
           <div className="editor-actions">
             <button className="btn primary" type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
+              Save
             </button>
             <button
               className="btn danger"
@@ -4486,16 +4537,16 @@ function TransactionRow({
             />
           </label>
           <div className="editor-actions">
-            <label className="fixed-check fixed-check-inline">
-              <input
-                type="checkbox"
-                checked={Boolean(tx.fixed)}
-                onChange={(event) => onFixed(event.target.checked)}
-              />
+            <button
+              type="button"
+              className={tx.fixed ? "add-fixed-pill on" : "add-fixed-pill"}
+              aria-pressed={Boolean(tx.fixed)}
+              onClick={() => onFixed(!tx.fixed)}
+            >
               Fixed
-            </label>
+            </button>
             <button className="btn primary" type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
+              Save
             </button>
             <button
               className="btn danger"
@@ -4726,6 +4777,44 @@ function ConfigPanel({
     }
   }
 
+  async function removeCategory(slug) {
+    if (slug === "other") {
+      onError("Other stays — it’s the catch-all category.");
+      return;
+    }
+    if (categories.length <= 1) {
+      onError("Keep at least one category.");
+      return;
+    }
+    const target = categories.find((item) => item.slug === slug);
+    if (target?.hasRecords || target?.recordCount > 0) {
+      onError("That category still has records. Move or delete them first.");
+      return;
+    }
+    setSavingSlug(slug);
+    try {
+      const payload = await deleteCategory(slug, month);
+      onSaved(payload);
+      const nextQuick = readQuickCategorySlugs(userId, payload.categories || []).filter(
+        (item) => item !== slug,
+      );
+      writeQuickCategorySlugs(userId, nextQuick);
+      if (editingSlug === slug) setEditingSlug("");
+      if (fixedCategory === slug) {
+        setFixedCategory(
+          payload.categories?.find((item) => item.slug === "other")?.slug ||
+            payload.categories?.[0]?.slug ||
+            "other",
+        );
+      }
+      onError("");
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSavingSlug("");
+    }
+  }
+
   async function confirmDeleteUser() {
     setDeleting(true);
     try {
@@ -4833,7 +4922,7 @@ function ConfigPanel({
               type="submit"
               disabled={incomeSaving}
             >
-              {incomeSaving ? "Saving…" : "Save"}
+              Save
             </button>
             <button
               className="btn"
@@ -4915,7 +5004,7 @@ function ConfigPanel({
               type="submit"
               disabled={savingsSaving}
             >
-              {savingsSaving ? "Saving…" : "Save"}
+              Save
             </button>
             <button
               className="btn"
@@ -5048,7 +5137,7 @@ function ConfigPanel({
               type="submit"
               disabled={fixedSaving}
             >
-              {fixedSaving ? "Saving…" : "Add fixed"}
+              Add fixed
             </button>
             <button
               className="btn"
@@ -5162,13 +5251,17 @@ function ConfigPanel({
       >
         <h2>Categories</h2>
         <p className="hint">
-          Rename a category, or add one. Monthly fixed bills live in Fixed
-          transactions above; one-off fixed lines can still be marked on add.
+          Rename or add one. Empty categories can be removed; ones with records
+          stay until those lines are moved. Monthly fixed bills live in Fixed
+          transactions above.
         </p>
         <div className="config-cat-grid">
           {categories.map((item, index) => {
             const dirty = (drafts[item.slug] || "").trim() !== item.name;
             const editing = editingSlug === item.slug;
+            const hasRecords = Boolean(item.hasRecords || item.recordCount > 0);
+            const canRemove =
+              item.slug !== "other" && categories.length > 1 && !hasRecords;
             return (
               <div
                 className={
@@ -5201,14 +5294,27 @@ function ConfigPanel({
                       {savingSlug === item.slug ? "…" : "Save"}
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      className="icon-btn pen-btn"
-                      aria-label={`Edit ${item.name}`}
-                      onClick={() => setEditingSlug(item.slug)}
-                    >
-                      <PenIcon />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="icon-btn pen-btn"
+                        aria-label={`Edit ${item.name}`}
+                        onClick={() => setEditingSlug(item.slug)}
+                      >
+                        <PenIcon />
+                      </button>
+                      {canRemove ? (
+                        <button
+                          type="button"
+                          className="icon-btn cat-remove-btn"
+                          aria-label={`Remove ${item.name}`}
+                          disabled={savingSlug === item.slug}
+                          onClick={() => removeCategory(item.slug)}
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </>
                   )}
                 </div>
               </div>
