@@ -172,6 +172,10 @@ async function ensureFixedForMonth(userId, monthKey) {
   const todayMonth = today.slice(0, 7);
   // Never post into a future month. For the current month, wait until the day.
   if (monthKey > todayMonth) return 0;
+  // Never rewrite past months when browsing — only the open month gets fixed lines.
+  const summaries = await monthSummaries(userId);
+  const openMonth = summaries[0]?.month;
+  if (openMonth && monthKey !== openMonth) return 0;
 
   const { rows: templates } = await pool.query(
     `select id, amount, description, category_slug, day_of_month
@@ -687,9 +691,7 @@ app.get("/api/bootstrap", async (req, res, next) => {
     const summaries = await monthSummaries(user.id);
     const openMonth = summaries[0]?.month || todayKey();
     const requested = String(req.query.month || "").trim();
-    const target = requested || openMonth;
     await ensureFixedForMonth(user.id, openMonth);
-    if (target !== openMonth) await ensureFixedForMonth(user.id, target);
     res.json(await loadMonth(user.id, requested || undefined));
   } catch (error) {
     next(error);

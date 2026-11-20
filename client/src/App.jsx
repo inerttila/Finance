@@ -926,6 +926,19 @@ export default function App() {
     setMonth(key);
   }
 
+  function selectAppTab(id) {
+    setAppTab(id);
+    // Home / Config always show the open month. Past months are for Expenses.
+    if (
+      (id === "home" || id === "config") &&
+      data?.closed &&
+      data.openMonth &&
+      data.openMonth !== month
+    ) {
+      showMonth(data.openMonth);
+    }
+  }
+
   async function startAdd(target) {
     if (addTarget === target) {
       setAddTarget(null);
@@ -1147,7 +1160,7 @@ export default function App() {
               }
               aria-label={tab.label}
               aria-current={appTab === tab.id ? "page" : undefined}
-              onClick={() => setAppTab(tab.id)}
+              onClick={() => selectAppTab(tab.id)}
             >
               <span className="app-nav-icon">{tab.icon}</span>
               <span className="app-nav-label">{tab.label}</span>
