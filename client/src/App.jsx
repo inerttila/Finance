@@ -291,6 +291,67 @@ function PenIcon() {
   );
 }
 
+function SpinnerIcon({ size = 14 }) {
+  return (
+    <svg
+      className="btn-spinner"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      aria-hidden="true"
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.75"
+        strokeLinecap="round"
+        strokeDasharray="42 60"
+      />
+    </svg>
+  );
+}
+
+function BusyLabel({ busy, children }) {
+  return (
+    <span className={busy ? "btn-label is-busy" : "btn-label"}>
+      {busy ? (
+        <span className="btn-spinner-wrap" aria-hidden="true">
+          <SpinnerIcon />
+        </span>
+      ) : null}
+      <span className="btn-label-text">{children}</span>
+    </span>
+  );
+}
+
+function NoticeToast({ message, onClose, action = null, sticky = false }) {
+  useEffect(() => {
+    if (!message || sticky) return undefined;
+    const id = window.setTimeout(() => onClose(), 4200);
+    return () => window.clearTimeout(id);
+  }, [message, sticky, onClose]);
+
+  if (!message) return null;
+
+  return (
+    <div className="notice-toast" role="alert">
+      <p className="notice-toast-copy">{message}</p>
+      {action ? <div className="notice-toast-action">{action}</div> : null}
+      <button
+        type="button"
+        className="notice-toast-close"
+        aria-label="Dismiss"
+        onClick={onClose}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 const GREET_FLAG_KEY = "finance-show-hello";
 
 function markShowHello() {
@@ -938,11 +999,7 @@ export default function App() {
   if (screen === "auth") {
     return (
       <div className="page">
-        {error && (
-          <p className="banner" role="alert">
-            {error}
-          </p>
-        )}
+        <NoticeToast message={error} onClose={() => setError("")} />
         <AuthGate busy={authBusy} onSignIn={onSignIn} onSignUp={onSignUp} />
       </div>
     );
@@ -959,11 +1016,7 @@ export default function App() {
   if (screen === "start" || screen === "create") {
     return (
       <div className="page">
-        {error && (
-          <p className="banner" role="alert">
-            {error}
-          </p>
-        )}
+        <NoticeToast message={error} onClose={() => setError("")} />
         <StartPage
           mode={screen === "create" ? "create" : "start"}
           defaultName={authUser?.displayName || ""}
@@ -1166,10 +1219,12 @@ export default function App() {
         )}
       </header>
 
-      {error && (
-        <p className="banner" role="alert">
-          {error}{" "}
-          {!data && (
+      <NoticeToast
+        message={error}
+        sticky={!data}
+        onClose={() => setError("")}
+        action={
+          !data ? (
             <button
               type="button"
               className="texty"
@@ -1177,9 +1232,9 @@ export default function App() {
             >
               Retry
             </button>
-          )}
-        </p>
-      )}
+          ) : null
+        }
+      />
 
       {data && appTab === "home" && (
         <section className="tab-panel">
@@ -1879,6 +1934,9 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
   }, [categories, userId]);
 
   const active = Boolean(needle || category || monthFilter || dayFilter);
+  const pendingQuery = draft.trim() !== needle;
+  const searching =
+    loading || (pendingQuery && Boolean(draft.trim() || category || monthFilter || dayFilter));
   const selectedName =
     categoryChips.find((item) => item.slug === category)?.name || "";
   const selectedMonthLabel = monthFilter ? formatMonth(monthFilter) : "";
@@ -1891,15 +1949,21 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
 
   return (
     <section className="search-panel">
-      <label className="search-field">
+      <label className={searching ? "search-field is-searching" : "search-field"}>
         <span className="sr-only">Search spending</span>
         <input
           type="search"
           value={draft}
           placeholder="Amount or name…"
           autoFocus
+          aria-busy={searching}
           onChange={(event) => setDraft(event.target.value)}
         />
+        {searching ? (
+          <span className="search-field-spinner" aria-hidden="true">
+            <SpinnerIcon size={16} />
+          </span>
+        ) : null}
       </label>
       <div className="search-cats" role="group" aria-label="Day type">
         {[
@@ -1967,8 +2031,13 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
           })}
         </div>
       )}
-      {active && loading && <p className="hint">Searching…</p>}
-      {active && !loading && results.length === 0 && (
+      {active && searching && (
+        <p className="search-loading" role="status" aria-live="polite">
+          <SpinnerIcon size={14} />
+          <span>Searching…</span>
+        </p>
+      )}
+      {active && !searching && results.length === 0 && (
         <p className="empty">
           {needle
             ? `No spending matched “${needle}”.`
@@ -1977,7 +2046,7 @@ function SearchPanel({ userId, categories, monthList, onOpenMonth, onError }) {
               : "No spending matched."}
         </p>
       )}
-      {active && !loading && groups.length > 0 && (
+      {active && !searching && groups.length > 0 && (
         <div className="search-results">
           <p className="hint">
             {countLines(results.length)}
@@ -2347,7 +2416,7 @@ function AuthGate({ busy, onSignIn, onSignUp }) {
             disabled={busy}
             onClick={onSignIn}
           >
-            {busy ? "Opening…" : "Sign in"}
+            <BusyLabel busy={busy}>Sign in</BusyLabel>
           </button>
           <button
             type="button"
@@ -2671,7 +2740,7 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
                 disabled={saving}
                 onClick={onStart}
               >
-                {saving ? "Starting…" : "Start"}
+                <BusyLabel busy={saving}>Start</BusyLabel>
               </button>
             </div>
           </div>
@@ -2759,14 +2828,18 @@ function UserMenu({
             onClick={onSignOut}
           >
             <span className="user-menu-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="16" height="16">
-                <path
-                  fill="currentColor"
-                  d="M10 4v2h8v12h-8v2h10V4H10zm-1.3 5.3L6.4 12l2.3 2.7-1.4 1.2L3.6 12l3.7-3.9 1.4 1.2z"
-                />
-              </svg>
+              {busy ? (
+                <SpinnerIcon size={16} />
+              ) : (
+                <svg viewBox="0 0 24 24" width="16" height="16">
+                  <path
+                    fill="currentColor"
+                    d="M10 4v2h8v12h-8v2h10V4H10zm-1.3 5.3L6.4 12l2.3 2.7-1.4 1.2L3.6 12l3.7-3.9 1.4 1.2z"
+                  />
+                </svg>
+              )}
             </span>
-            {busy ? "Signing out…" : "Sign out"}
+            Sign out
           </button>
         </div>
       )}
@@ -3022,9 +3095,9 @@ function SiteMoneyForm({
       </label>
       <div className="site-money-actions">
         <button className="btn primary" type="submit" disabled={saving}>
-          Add
+          <BusyLabel busy={saving}>Add</BusyLabel>
         </button>
-        <button className="btn" type="button" onClick={onCancel}>
+        <button className="btn" type="button" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
       </div>
@@ -3666,7 +3739,7 @@ function ScanInvoiceModal({
               type="submit"
               disabled={saving}
             >
-              Add expense
+              <BusyLabel busy={saving}>Add expense</BusyLabel>
             </button>
             <button
               className="btn add-scan-again"
@@ -4201,7 +4274,7 @@ function AddForm({
         type="submit"
         disabled={saving || editingQuick}
       >
-        Add expense
+        <BusyLabel busy={saving}>Add expense</BusyLabel>
       </button>
     </form>
   );
@@ -4368,11 +4441,12 @@ function MoneyInRow({
           </label>
           <div className="editor-actions">
             <button className="btn primary" type="submit" disabled={saving}>
-              Save
+              <BusyLabel busy={saving}>Save</BusyLabel>
             </button>
             <button
               className="btn danger"
               type="button"
+              disabled={saving}
               onClick={() => setConfirmDelete(true)}
             >
               Delete
@@ -4384,7 +4458,7 @@ function MoneyInRow({
         <ConfirmModal
           title="Delete money in"
           message={`Delete ${entry.title}? This cannot be undone.`}
-          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          confirmLabel="Delete"
           busy={deleting}
           onConfirm={confirmDeleteEntry}
           onCancel={() => setConfirmDelete(false)}
@@ -4541,16 +4615,18 @@ function TransactionRow({
               type="button"
               className={tx.fixed ? "add-fixed-pill on" : "add-fixed-pill"}
               aria-pressed={Boolean(tx.fixed)}
+              disabled={saving || deleting}
               onClick={() => onFixed(!tx.fixed)}
             >
               Fixed
             </button>
-            <button className="btn primary" type="submit" disabled={saving}>
-              Save
+            <button className="btn primary" type="submit" disabled={saving || deleting}>
+              <BusyLabel busy={saving}>Save</BusyLabel>
             </button>
             <button
               className="btn danger"
               type="button"
+              disabled={saving || deleting}
               onClick={() => setConfirmDelete(true)}
             >
               Delete
@@ -4562,7 +4638,7 @@ function TransactionRow({
         <ConfirmModal
           title="Delete line"
           message={`Delete ${tx.description}? This cannot be undone.`}
-          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          confirmLabel="Delete"
           busy={deleting}
           onConfirm={confirmDeleteTx}
           onCancel={() => setConfirmDelete(false)}
@@ -4615,7 +4691,7 @@ function ConfirmModal({
             disabled={busy}
             onClick={onConfirm}
           >
-            {confirmLabel}
+            <BusyLabel busy={busy}>{confirmLabel}</BusyLabel>
           </button>
           <button
             className="btn"
@@ -4922,11 +4998,12 @@ function ConfigPanel({
               type="submit"
               disabled={incomeSaving}
             >
-              Save
+              <BusyLabel busy={incomeSaving}>Save</BusyLabel>
             </button>
             <button
               className="btn"
               type="button"
+              disabled={incomeSaving}
               onClick={() => {
                 setIncomeOpen(false);
                 setIncomeValue(String(income ?? 0));
@@ -5004,11 +5081,12 @@ function ConfigPanel({
               type="submit"
               disabled={savingsSaving}
             >
-              Save
+              <BusyLabel busy={savingsSaving}>Save</BusyLabel>
             </button>
             <button
               className="btn"
               type="button"
+              disabled={savingsSaving}
               onClick={() => {
                 setSavingsOpen(false);
                 setSavingsAmount("");
@@ -5137,11 +5215,12 @@ function ConfigPanel({
               type="submit"
               disabled={fixedSaving}
             >
-              Add fixed
+              <BusyLabel busy={fixedSaving}>Add fixed</BusyLabel>
             </button>
             <button
               className="btn"
               type="button"
+              disabled={fixedSaving}
               onClick={() => {
                 setFixedOpen(false);
                 setFixedAmount("");
@@ -5201,7 +5280,7 @@ function ConfigPanel({
                     disabled={fixedBusyId === item.id}
                     onClick={() => onFixedRemove(item.id)}
                   >
-                    {fixedBusyId === item.id ? "…" : "Remove"}
+                    <BusyLabel busy={fixedBusyId === item.id}>Remove</BusyLabel>
                   </button>
                 </li>
               );
@@ -5284,14 +5363,14 @@ function ConfigPanel({
                   <strong className="config-cat-name">{item.name}</strong>
                 )}
                 <div className="config-cat-actions">
-                  {editing ? (
+                      {editing ? (
                     <button
                       className="btn"
                       type="button"
                       disabled={!dirty || savingSlug === item.slug}
                       onClick={() => saveName(item.slug)}
                     >
-                      {savingSlug === item.slug ? "…" : "Save"}
+                      <BusyLabel busy={savingSlug === item.slug}>Save</BusyLabel>
                     </button>
                   ) : (
                     <>
@@ -5299,6 +5378,7 @@ function ConfigPanel({
                         type="button"
                         className="icon-btn pen-btn"
                         aria-label={`Edit ${item.name}`}
+                        disabled={Boolean(savingSlug)}
                         onClick={() => setEditingSlug(item.slug)}
                       >
                         <PenIcon />
@@ -5308,10 +5388,14 @@ function ConfigPanel({
                           type="button"
                           className="icon-btn cat-remove-btn"
                           aria-label={`Remove ${item.name}`}
-                          disabled={savingSlug === item.slug}
+                          disabled={Boolean(savingSlug)}
                           onClick={() => removeCategory(item.slug)}
                         >
-                          ×
+                          {savingSlug === item.slug ? (
+                            <SpinnerIcon size={14} />
+                          ) : (
+                            "×"
+                          )}
                         </button>
                       ) : null}
                     </>
@@ -5333,7 +5417,7 @@ function ConfigPanel({
             type="submit"
             disabled={savingSlug === "new"}
           >
-            {savingSlug === "new" ? "Adding…" : "Add"}
+            <BusyLabel busy={savingSlug === "new"}>Add</BusyLabel>
           </button>
         </div>
       </form>
@@ -5356,7 +5440,7 @@ function ConfigPanel({
           disabled={deleting}
           onClick={() => setConfirmDelete(true)}
         >
-          {deleting ? "Deleting…" : "Delete account"}
+          <BusyLabel busy={deleting}>Delete account</BusyLabel>
         </button>
       </div>
 
@@ -5364,7 +5448,7 @@ function ConfigPanel({
         <ConfirmModal
           title="Delete account"
           message={`Delete ${label}? The ledger, local savings data, and Hexclave login are removed and cannot be undone.`}
-          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          confirmLabel="Delete"
           busy={deleting}
           onConfirm={confirmDeleteUser}
           onCancel={() => setConfirmDelete(false)}
