@@ -6,6 +6,8 @@ import { netHexclaveTheme } from "./hexclave/theme.js";
 import App from "./App.jsx";
 import SignInPage from "./auth/SignInPage.jsx";
 import SignUpPage from "./auth/SignUpPage.jsx";
+import OnboardingPage from "./auth/OnboardingPage.jsx";
+import EmailVerificationPage from "./auth/EmailVerificationPage.jsx";
 import "./styles.css";
 
 const path = window.location.pathname.replace(/\/$/, "") || "/";
@@ -22,6 +24,8 @@ function AuthFallback() {
 function Root() {
   if (path === "/sign-in") return <SignInPage />;
   if (path === "/sign-up") return <SignUpPage />;
+  if (path === "/onboarding") return <OnboardingPage />;
+  if (path === "/email-verification") return <EmailVerificationPage />;
   return <App />;
 }
 

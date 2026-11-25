@@ -2,7 +2,7 @@
 # Live (Render) uses the Dockerfile + DATABASE_URL from the host env (Neon) — not this file.
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: finance
       POSTGRES_PASSWORD: finance
@@ -10,7 +10,8 @@ services:
     ports:
       - "5555:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Postgres 18+ images expect the mount at /var/lib/postgresql (not .../data).
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
       interval: 2s

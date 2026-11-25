@@ -530,6 +530,9 @@ async function loadMonth(userId, month) {
 
   const peopleTotal = byCategory.find((category) => category.slug === "people")?.total ?? 0;
   const bankTotal = byCategory.find((category) => category.slug === "bank")?.total ?? 0;
+  const fixedTotal = transactions
+    .filter((tx) => tx.fixed)
+    .reduce((sum, tx) => sum + tx.amount, 0);
   const weekend = transactions.filter((tx) => tx.weekend).reduce((sum, tx) => sum + tx.amount, 0);
   const largest = transactions.reduce((best, tx) => (tx.amount > (best?.amount ?? -1) ? tx : best), null);
   const busiest = [...byCategory].filter((category) => category.count > 0).sort((a, b) => b.count - a.count)[0];
@@ -561,7 +564,7 @@ async function loadMonth(userId, month) {
     carriedFrom: viewed?.carriedFrom ?? null,
     spent,
     remaining: income + site + carried - spent,
-    dayToDay: spent - peopleTotal - bankTotal,
+    dayToDay: spent - fixedTotal,
     peopleTotal,
     bankTotal,
     weekend,

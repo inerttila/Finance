@@ -26,6 +26,7 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
   countLines,
+  daysInMonth,
   defaultDateInMonth,
   formatDay,
   formatMonth,
@@ -88,6 +89,78 @@ const HERO_PREF_OPTIONS = [
     hint: "Add money in on the Home card",
   },
 ];
+
+const DEFAULT_PULSE_PREFS = {
+  showDaysLeft: true,
+  showSafeDay: true,
+  showAvgDaily: true,
+  showRunway: true,
+  showPaceVsPlan: false,
+  showSpentPct: false,
+  showWeekendBurn: false,
+  showTodayRoom: false,
+  showVsLastMonth: false,
+  showFixedLoad: false,
+};
+
+const PULSE_PREF_OPTIONS = [
+  {
+    key: "showDaysLeft",
+    label: "Days left",
+    hint: "Days still ahead this month.",
+  },
+  {
+    key: "showSafeDay",
+    label: "Safe to spend / day",
+    hint: "Left ÷ days left. What you can spend each remaining day.",
+  },
+  {
+    key: "showAvgDaily",
+    label: "Avg daily spend",
+    hint: "(Spent − fixed) ÷ days so far. Day-to-day pace so far.",
+  },
+  {
+    key: "showRunway",
+    label: "Runway",
+    hint: "Left ÷ avg daily spend. How long what’s left lasts at this pace.",
+  },
+  {
+    key: "showPaceVsPlan",
+    label: "Pace vs plan",
+    hint: "(Avg daily × days in month) vs income pool. Shows if you’re on track to finish under budget.",
+  },
+  {
+    key: "showSpentPct",
+    label: "Spent % of pool",
+    hint: "Spent ÷ (income + money-in + carry). How much of the month’s money is used.",
+  },
+  {
+    key: "showWeekendBurn",
+    label: "Weekend burn",
+    hint: "Weekend spent ÷ weekend days so far. Useful if weekends are the expensive days.",
+  },
+  {
+    key: "showTodayRoom",
+    label: "Today’s room",
+    hint: "Safe/day − spent today. How much you can still spend today without going over pace.",
+  },
+  {
+    key: "showVsLastMonth",
+    label: "Vs last month",
+    hint: "This month’s avg/day vs last month’s avg/day. Spending hotter or cooler than last month.",
+  },
+  {
+    key: "showFixedLoad",
+    label: "Fixed load",
+    hint: "Fixed ÷ pool. Share of the month already locked before day-to-day spending.",
+  },
+];
+
+function formatPct(value) {
+  if (!Number.isFinite(value)) return "—";
+  const rounded = Math.round(value * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+}
 
 const DEFAULT_SITE_TITLE = "Added money";
 
@@ -398,6 +471,24 @@ function writeHeroPrefs(userId, prefs) {
   localStorage.setItem(heroPrefsKey(userId), JSON.stringify(prefs));
 }
 
+function pulsePrefsKey(userId) {
+  return `finance-pulse-prefs:${userId || "anon"}`;
+}
+
+function readPulsePrefs(userId) {
+  try {
+    const raw = localStorage.getItem(pulsePrefsKey(userId));
+    if (!raw) return { ...DEFAULT_PULSE_PREFS };
+    return { ...DEFAULT_PULSE_PREFS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_PULSE_PREFS };
+  }
+}
+
+function writePulsePrefs(userId, prefs) {
+  localStorage.setItem(pulsePrefsKey(userId), JSON.stringify(prefs));
+}
+
 const DEFAULT_QUICK_CATEGORY_SLUGS = [
   "coffee",
   "eating-out",
@@ -446,6 +537,7 @@ function clearFinanceLocalData(userId) {
   const exact = new Set([
     savingsKey(id),
     heroPrefsKey(id),
+    pulsePrefsKey(id),
     quickCategoriesKey(id),
     `finance-pie-open:${id}`,
     `finance-categories-open:${id}`,
@@ -520,14 +612,21 @@ export default function App() {
   const [heroPrefs, setHeroPrefs] = useState(() =>
     readHeroPrefs(getStoredUserId()),
   );
+  const [pulsePrefs, setPulsePrefs] = useState(() =>
+    readPulsePrefs(getStoredUserId()),
+  );
 
   const currentUser =
     users?.find((user) => user.id === userId) || data?.user || null;
 
   useEffect(() => {
     let cancelled = false;
-    hexclave.getUser().then((user) => {
+    hexclave.getUser({ includeRestricted: true }).then((user) => {
       if (cancelled) return;
+      if (user?.isRestricted) {
+        void hexclave.redirectToOnboarding({ replace: true });
+        return;
+      }
       setAuthUser(user);
       setAuthReady(true);
     });
@@ -721,12 +820,21 @@ export default function App() {
 
   useEffect(() => {
     setHeroPrefs(readHeroPrefs(userId));
+    setPulsePrefs(readPulsePrefs(userId));
   }, [userId]);
 
   function updateHeroPref(key, value) {
     setHeroPrefs((current) => {
       const next = { ...current, [key]: value };
       writeHeroPrefs(userId, next);
+      return next;
+    });
+  }
+
+  function updatePulsePref(key, value) {
+    setPulsePrefs((current) => {
+      const next = { ...current, [key]: value };
+      writePulsePrefs(userId, next);
       return next;
     });
   }
@@ -1068,10 +1176,13 @@ export default function App() {
             />
           )}
           <div className="brand">
-            <span>Net</span>
-            <small>
-              {currentUser?.name ? currentUser.name : "monthly spending"}
-            </small>
+            <img
+              className="brand-mark"
+              src="/net-mark.svg"
+              width="72"
+              height="54"
+              alt="Net"
+            />
           </div>
         </div>
 
@@ -1275,7 +1386,11 @@ export default function App() {
             onSaved={applyPayload}
             onError={setError}
           />
-          <MonthPulse data={data} remaining={effectiveRemaining} />
+          <MonthPulse
+            data={data}
+            remaining={effectiveRemaining}
+            prefs={pulsePrefs}
+          />
           {data.insights.length > 0 && (
             <ul className="insights">
               {data.insights.map((line) => (
@@ -1517,7 +1632,7 @@ export default function App() {
         <section className="tab-panel">
           <TabTitle
             title="Config"
-            copy="Tune the home card, rename categories, or remove this ledger."
+            copy="Tune Home cards, rename categories, or remove this ledger."
           />
           <ConfigPanel
             user={currentUser || data.user}
@@ -1527,10 +1642,12 @@ export default function App() {
             income={data.income}
             remaining={effectiveRemaining}
             heroPrefs={heroPrefs}
+            pulsePrefs={pulsePrefs}
             savingsEntries={savingsEntries}
             fixedTemplates={data.fixedTemplates || []}
             onSavingsChange={() => setSavingsTick((value) => value + 1)}
             onHeroPref={updateHeroPref}
+            onPulsePref={updatePulsePref}
             onSaved={(payload) => {
               applyPayload(payload);
               setError("");
@@ -2397,9 +2514,16 @@ function AuthGate({ busy, onSignIn, onSignUp }) {
   const rotateWord = AUTH_ROTATE_WORDS[wordIndex];
 
   return (
-    <section className="start-flow auth-gate">
-      <div className="auth-gate-inner">
-        <p className="eyebrow auth-gate-eyebrow">Net</p>
+    <>
+      <img
+        className="auth-gate-logo"
+        src="/net-mark.svg"
+        width="104"
+        height="78"
+        alt="Net"
+      />
+      <section className="start-flow auth-gate">
+        <div className="auth-gate-inner">
         <h1 className="auth-title">
           <span className="auth-title-line">
             {"Sign in to your".split(" ").map((word, index) => (
@@ -2442,6 +2566,7 @@ function AuthGate({ busy, onSignIn, onSignUp }) {
         </div>
       </div>
     </section>
+    </>
   );
 }
 
@@ -2581,7 +2706,15 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
   ];
 
   return (
-    <section className="start-flow">
+    <>
+      <img
+        className="auth-gate-logo"
+        src="/net-mark.svg"
+        width="104"
+        height="78"
+        alt="Net"
+      />
+      <section className="start-flow">
       <div className="start-progress" aria-hidden="true">
         {[0, 1, 2].map((index) => (
           <span key={index} className={index <= step ? "on" : ""} />
@@ -2760,6 +2893,7 @@ function StartPage({ mode, defaultName = "", onCreated, onCancel, onSignOut }) {
         )}
       </div>
     </section>
+    </>
   );
 }
 
@@ -2803,6 +2937,7 @@ function UserMenu({
       >
         {user.initial}
       </button>
+      <small className="user-menu-name">{user.name}</small>
       {open && (
         <div className="user-menu-panel" role="menu">
           <div className="user-menu-head">
@@ -2860,15 +2995,21 @@ function UserMenu({
   );
 }
 
-function MonthPulse({ data, remaining, spentExtra = 0 }) {
+function MonthPulse({
+  data,
+  remaining,
+  spentExtra = 0,
+  prefs = DEFAULT_PULSE_PREFS,
+}) {
   const fixedSpent = data.transactions.reduce(
     (sum, tx) => sum + (tx.fixed ? tx.amount : 0),
     0,
   );
   const left = remaining ?? data.remaining;
+  const pool = data.income + (data.site || 0) + (data.carried || 0);
   const pace = monthPace(
     data.month,
-    data.income + (data.site || 0) + (data.carried || 0),
+    pool,
     data.spent - fixedSpent + spentExtra,
     left,
     data.transactions,
@@ -2876,69 +3017,162 @@ function MonthPulse({ data, remaining, spentExtra = 0 }) {
   const previous = [...(data.monthList || [])]
     .filter((item) => item.month < data.month)
     .sort((a, b) => b.month.localeCompare(a.month))[0];
+
+  const today = todayIso();
+  const spentToday = data.transactions
+    .filter((tx) => tx.spentOn === today)
+    .reduce((sum, tx) => sum + tx.amount, 0);
+  let weekendSpent = 0;
+  let weekendDays = 0;
+  for (let day = 1; day <= pace.elapsed; day += 1) {
+    const iso = `${data.month}-${String(day).padStart(2, "0")}`;
+    if (!isWeekend(iso)) continue;
+    weekendDays += 1;
+    weekendSpent += data.transactions
+      .filter((tx) => tx.spentOn === iso)
+      .reduce((sum, tx) => sum + tx.amount, 0);
+  }
+  const projected = pace.avg * pace.length;
+  const spentPct = pool > 0 ? (data.spent / pool) * 100 : null;
+  const weekendBurn = weekendDays > 0 ? weekendSpent / weekendDays : null;
+  const todayRoom = pace.safe - spentToday;
+  const thisFullAvg = pace.elapsed > 0 ? data.spent / pace.elapsed : null;
+  const lastFullAvg = previous
+    ? previous.spent / daysInMonth(previous.month)
+    : null;
+  const vsLastMonth =
+    thisFullAvg != null && lastFullAvg != null
+      ? thisFullAvg - lastFullAvg
+      : null;
+  const fixedLoad = pool > 0 ? (fixedSpent / pool) * 100 : null;
+
+  const openMetrics = [
+    {
+      key: "showDaysLeft",
+      label: "Days left",
+      value: pace.daysLeft,
+      tone: "plain",
+    },
+    {
+      key: "showSafeDay",
+      label: "Safe to spend / day",
+      value: lek(pace.safe),
+      tone: "plain",
+    },
+    {
+      key: "showAvgDaily",
+      label: "Avg daily spend",
+      value: lek(pace.avg),
+      tone: "plain",
+    },
+    {
+      key: "showRunway",
+      label: "Runway",
+      value: formatRunway(pace.runway),
+      tone: pace.runway != null && pace.runway < 0 ? "neg" : "plain",
+    },
+    {
+      key: "showPaceVsPlan",
+      label: "Pace vs plan",
+      value: lek(projected),
+      tone: projected > pool ? "neg" : "plain",
+    },
+    {
+      key: "showSpentPct",
+      label: "Spent % of pool",
+      value: spentPct == null ? "—" : formatPct(spentPct),
+      tone: spentPct != null && spentPct > 100 ? "neg" : "plain",
+    },
+    {
+      key: "showWeekendBurn",
+      label: "Weekend burn",
+      value: weekendBurn == null ? "—" : lek(weekendBurn),
+      tone: "plain",
+    },
+    {
+      key: "showTodayRoom",
+      label: "Today’s room",
+      value: lek(todayRoom),
+      tone: todayRoom < 0 ? "neg" : "plain",
+    },
+    {
+      key: "showVsLastMonth",
+      label: "Vs last month",
+      value: vsLastMonth == null ? "—" : lek(vsLastMonth),
+      tone: vsLastMonth != null && vsLastMonth > 0 ? "neg" : "plain",
+    },
+    {
+      key: "showFixedLoad",
+      label: "Fixed load",
+      value: fixedLoad == null ? "—" : formatPct(fixedLoad),
+      tone: "plain",
+    },
+  ].filter((item) => prefs[item.key]);
+
+  const showMetrics = pace.closed || openMetrics.length > 0;
+
   return (
-    <section className="pulse">
-      <div>
-        <h2>{pace.closed ? "That month" : "Right now"}</h2>
-        <dl className="pulse-metrics">
-          {pace.closed ? (
-            <>
-              <div>
-                <dt>Average per day</dt>
-                <dd className="figure">{lek(pace.avg)}</dd>
-              </div>
-              <div>
-                <dt>Days</dt>
-                <dd className="figure">{pace.length}</dd>
-              </div>
-              <div>
-                <dt>Left at the end</dt>
-                <dd className="figure">{lek(left)}</dd>
-              </div>
-              <div>
-                <dt>Lines</dt>
-                <dd className="figure">{data.count}</dd>
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <dt>Days left</dt>
-                <dd className="figure">{pace.daysLeft}</dd>
-              </div>
-              <div>
-                <dt>Safe to spend / day</dt>
-                <dd className="figure">{lek(pace.safe)}</dd>
-              </div>
-              <div>
-                <dt>Avg daily spend</dt>
-                <dd className="figure">{lek(pace.avg)}</dd>
-              </div>
-              <div>
-                <dt>Runway</dt>
-                <dd className="figure">{formatRunway(pace.runway)}</dd>
-              </div>
-            </>
+    <section className={showMetrics ? "pulse" : "pulse pulse-chart-only"}>
+      {showMetrics ? (
+        <div>
+          <h2>{pace.closed ? "That month" : "Right now"}</h2>
+          <dl className="pulse-metrics">
+            {pace.closed ? (
+              <>
+                <div>
+                  <dt>Average per day</dt>
+                  <dd className="figure">{lek(pace.avg)}</dd>
+                </div>
+                <div>
+                  <dt>Days</dt>
+                  <dd className="figure">{pace.length}</dd>
+                </div>
+                <div>
+                  <dt>Left at the end</dt>
+                  <dd className="figure">{lek(left)}</dd>
+                </div>
+                <div>
+                  <dt>Lines</dt>
+                  <dd className="figure">{data.count}</dd>
+                </div>
+              </>
+            ) : (
+              openMetrics.map((item) => (
+                <div key={item.key}>
+                  <dt>{item.label}</dt>
+                  <dd
+                    className={
+                      item.tone === "neg" ? "figure negative" : "figure"
+                    }
+                  >
+                    {item.value}
+                  </dd>
+                </div>
+              ))
+            )}
+          </dl>
+          <p className="hint">
+            {pace.closed
+              ? "Average per day this month, not counting fixed payments or savings moves."
+              : "Safe to spend splits what’s left across the days still ahead. Average ignores fixed payments and savings moves."}
+          </p>
+          {previous && (
+            <p className="hint">
+              {formatMonth(previous.month)} {lek(previous.spent)} →{" "}
+              {formatMonth(data.month)} {lek(data.spent)}.
+            </p>
           )}
-        </dl>
-        <p className="hint">
-          {pace.closed
-            ? "Average per day this month, not counting fixed payments or savings moves."
-            : "Safe to spend splits what’s left across the days still ahead. Average ignores fixed payments and savings moves."}
-        </p>
-        {previous && (
+        </div>
+      ) : null}
+      <div>
+        <h2>Left through the month</h2>
+        <BalanceChart points={pace.points} income={pool} />
+        {!showMetrics && previous ? (
           <p className="hint">
             {formatMonth(previous.month)} {lek(previous.spent)} →{" "}
             {formatMonth(data.month)} {lek(data.spent)}.
           </p>
-        )}
-      </div>
-      <div>
-        <h2>Left through the month</h2>
-        <BalanceChart
-          points={pace.points}
-          income={data.income + (data.site || 0) + (data.carried || 0)}
-        />
+        ) : null}
       </div>
     </section>
   );
@@ -4728,10 +4962,12 @@ function ConfigPanel({
   income,
   remaining = 0,
   heroPrefs,
+  pulsePrefs = DEFAULT_PULSE_PREFS,
   savingsEntries = [],
   fixedTemplates: fixedTemplatesProp = [],
   onSavingsChange,
   onHeroPref,
+  onPulsePref,
   onSaved,
   onDeleted,
   onError,
@@ -5322,6 +5558,39 @@ function ConfigPanel({
                 style={{ animationDelay: `${80 + index * 60}ms` }}
                 aria-pressed={on}
                 onClick={() => onHeroPref(option.key, !on)}
+              >
+                <span className="config-widget-check" aria-hidden="true">
+                  {on ? "✓" : ""}
+                </span>
+                <span className="config-widget-copy">
+                  <strong>{option.label}</strong>
+                  <small>{option.hint}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section
+        className="config-block config-enter"
+        style={{ animationDelay: "120ms" }}
+      >
+        <h2>Right now</h2>
+        <p className="hint">
+          Choose which pace metrics show on Home. Turn on only what you use.
+        </p>
+        <div className="config-widgets">
+          {PULSE_PREF_OPTIONS.map((option, index) => {
+            const on = Boolean(pulsePrefs[option.key]);
+            return (
+              <button
+                key={option.key}
+                type="button"
+                className={on ? "config-widget on" : "config-widget"}
+                style={{ animationDelay: `${120 + index * 40}ms` }}
+                aria-pressed={on}
+                onClick={() => onPulsePref?.(option.key, !on)}
               >
                 <span className="config-widget-check" aria-hidden="true">
                   {on ? "✓" : ""}

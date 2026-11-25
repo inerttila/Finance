@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48" role="img" aria-label="Net">
+  <text
+    x="32"
+    y="30"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="28"
+    font-weight="700"
+    letter-spacing="-1.2"
+    fill="#221e18"
+  >Net</text>
+  <rect x="18" y="36" width="14" height="2.5" rx="1.25" fill="#9c3b2e"/>
+</svg>
